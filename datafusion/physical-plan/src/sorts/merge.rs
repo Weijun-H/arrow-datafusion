@@ -142,6 +142,8 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
     /// vector to ensure the next iteration starts with a different partition, preventing the same partition
     /// from being continuously polled.
     uninitiated_partitions: VecDeque<usize>,
+
+    enable_pull_based_execution: bool,
 }
 
 impl<C: CursorValues> SortPreservingMergeStream<C> {
@@ -153,6 +155,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
         fetch: Option<usize>,
         reservation: MemoryReservation,
         enable_round_robin_tie_breaker: bool,
+        enable_pull_based_execution: bool,
     ) -> Self {
         let stream_count = streams.partitions();
 
@@ -174,6 +177,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             produced: 0,
             uninitiated_partitions: (0..stream_count).collect(),
             enable_round_robin_tie_breaker,
+            enable_pull_based_execution,
         }
     }
 
