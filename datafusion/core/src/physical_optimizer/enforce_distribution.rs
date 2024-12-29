@@ -54,6 +54,7 @@ use datafusion_physical_expr::{
 };
 use datafusion_physical_optimizer::output_requirements::OutputRequirementExec;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
 use datafusion_physical_plan::windows::{get_best_fitting_window, BoundedWindowAggExec};
 use datafusion_physical_plan::ExecutionPlanProperties;
 
@@ -404,6 +405,10 @@ fn adjust_input_keys_ordering(
             requirements.data.clear();
         }
     } else if plan.as_any().downcast_ref::<RepartitionExec>().is_some()
+        || plan
+            .as_any()
+            .downcast_ref::<OnDemandRepartitionExec>()
+            .is_some()
         || plan
             .as_any()
             .downcast_ref::<CoalescePartitionsExec>()
@@ -857,6 +862,32 @@ fn add_roundrobin_on_top(
     }
 }
 
+fn add_on_demand_repartition_on_top(
+    input: DistributionContext,
+    n_target: usize,
+) -> Result<DistributionContext> {
+    // Adding repartition is helpful:
+    if input.plan.output_partitioning().partition_count() < n_target {
+        // When there is an existing ordering, we preserve ordering
+        // during repartition. This will be un-done in the future
+        // If any of the following conditions is true
+        // - Preserving ordering is not helpful in terms of satisfying ordering requirements
+        // - Usage of order preserving variants is not desirable
+        // (determined by flag `config.optimizer.prefer_existing_sort`)
+        let partitioning = Partitioning::OnDemand(n_target);
+        let repartition =
+            OnDemandRepartitionExec::try_new(Arc::clone(&input.plan), partitioning)?
+                .with_preserve_order();
+
+        let new_plan = Arc::new(repartition) as _;
+
+        Ok(DistributionContext::new(new_plan, true, vec![input]))
+    } else {
+        // Partition is not helpful, we already have desired number of partitions.
+        Ok(input)
+    }
+}
+
 /// Adds a hash repartition operator:
 /// - to increase parallelism, and/or
 /// - to satisfy requirements of the subsequent operators.
@@ -1035,6 +1066,18 @@ fn replace_order_preserving_variants(
             )?);
             return Ok(context);
         }
+    } else if let Some(repartition) = context
+        .plan
+        .as_any()
+        .downcast_ref::<OnDemandRepartitionExec>()
+    {
+        if repartition.preserve_order() {
+            context.plan = Arc::new(OnDemandRepartitionExec::try_new(
+                Arc::clone(&context.children[0].plan),
+                repartition.partitioning().clone(),
+            )?);
+            return Ok(context);
+        }
     }
 
     context.update_plan_from_children()
@@ -1156,6 +1199,7 @@ fn ensure_distribution(
     let target_partitions = config.execution.target_partitions;
     // When `false`, round robin repartition will not be added to increase parallelism
     let enable_round_robin = config.optimizer.enable_round_robin_repartition;
+    let enable_on_demand_repartition = config.optimizer.enable_on_demand_repartition;
     let repartition_file_scans = config.optimizer.repartition_file_scans;
     let batch_size = config.execution.batch_size;
     let should_use_estimates = config
@@ -1251,12 +1295,20 @@ fn ensure_distribution(
                         child =
                             add_hash_on_top(child, exprs.to_vec(), target_partitions)?;
                     }
+                    if enable_on_demand_repartition {
+                        child =
+                            add_on_demand_repartition_on_top(child, target_partitions)?;
+                    }
                 }
                 Distribution::UnspecifiedDistribution => {
                     if add_roundrobin {
                         // Add round-robin repartitioning on top of the operator
                         // to increase parallelism.
                         child = add_roundrobin_on_top(child, target_partitions)?;
+                    }
+                    if enable_on_demand_repartition {
+                        child =
+                            add_on_demand_repartition_on_top(child, target_partitions)?;
                     }
                 }
             };
@@ -1361,6 +1413,13 @@ fn update_children(mut dist_context: DistributionContext) -> Result<Distribution
         let child_plan_any = child_context.plan.as_any();
         child_context.data =
             if let Some(repartition) = child_plan_any.downcast_ref::<RepartitionExec>() {
+                !matches!(
+                    repartition.partitioning(),
+                    Partitioning::UnknownPartitioning(_)
+                )
+            } else if let Some(repartition) =
+                child_plan_any.downcast_ref::<OnDemandRepartitionExec>()
+            {
                 !matches!(
                     repartition.partitioning(),
                     Partitioning::UnknownPartitioning(_)
