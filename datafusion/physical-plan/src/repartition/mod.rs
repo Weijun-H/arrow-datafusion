@@ -1692,18 +1692,12 @@ mod tests {
         )
         .unwrap()
     }
-}
 
-#[cfg(test)]
-mod test {
-    use arrow_schema::{DataType, Field, Schema, SortOptions};
+    use arrow_schema::SortOptions;
 
-    use crate::memory::MemoryExec;
+    use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::union::UnionExec;
-    use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-
-    use super::*;
 
     /// Asserts that the plan is as expected
     ///
@@ -1770,6 +1764,36 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_coalesce_partition() -> Result<()> {
+        let schema = test_schema();
+        let partition = create_vec_batches(2);
+        let partitions = vec![partition.clone()];
+        let input = Arc::new(
+            MemoryExec::try_new(&partitions, Arc::clone(&schema), None).unwrap(),
+        );
+        let exec =
+            OnDemandRepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2)).unwrap();
+
+        let coalesce_exec =
+            CoalescePartitionsExec::new(Arc::new(exec) as Arc<dyn ExecutionPlan>);
+
+        // CoalescePartitionExec should not change the plan
+        let expected_plan = [
+            "CoalescePartitionsExec",
+            "  OnDemandRepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1",
+            "    MemoryExec: partitions=1, partition_sizes=[2]",
+        ];
+        assert_plan!(expected_plan, coalesce_exec.clone());
+
+        // execute the plan
+        let task_ctx = Arc::new(TaskContext::default());
+        let stream = coalesce_exec.execute(0, task_ctx)?;
+        let batches = crate::common::collect(stream).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_preserve_order_input_not_sorted() -> Result<()> {
         let schema = test_schema();
         let source1 = memory_exec(&schema);
@@ -1792,9 +1816,6 @@ mod test {
         Ok(())
     }
 
-    fn test_schema() -> Arc<Schema> {
-        Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
-    }
 
     fn sort_exprs(schema: &Schema) -> LexOrdering {
         let options = SortOptions::default();

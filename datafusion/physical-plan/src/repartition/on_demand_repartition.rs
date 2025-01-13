@@ -52,7 +52,7 @@ use datafusion_execution::TaskContext;
 use datafusion_common::HashMap;
 use futures::stream::Stream;
 use futures::{ready, FutureExt, StreamExt, TryStreamExt};
-use log::trace;
+use log::{debug, trace};
 use parking_lot::Mutex;
 
 #[derive(Debug, Clone)]
@@ -249,6 +249,7 @@ impl ExecutionPlan for OnDemandRepartitionExec {
                             reservation: Arc::clone(&reservation),
                             sender: partition_tx.clone(),
                             partition,
+                            is_requested: false,
                         }) as SendableRecordBatchStream
                     })
                     .collect::<Vec<_>>();
@@ -279,6 +280,7 @@ impl ExecutionPlan for OnDemandRepartitionExec {
                     reservation,
                     sender: partition_tx.clone(),
                     partition,
+                    is_requested: false,
                 }) as SendableRecordBatchStream)
             }
         })
@@ -361,6 +363,13 @@ impl OnDemandRepartitionExec {
 
             // fetch the next batch
             let timer = metrics.fetch_time.timer();
+            // TODO: To be removed
+            debug!(
+                "On demand pull from input Part: {} \n Are Output channels empty? {}",
+                partition,
+                output_channels.is_empty()
+            );
+
             let result = stream.next().await;
             timer.done();
 
@@ -481,6 +490,9 @@ struct OnDemandPerPartitionStream {
 
     /// Partition number
     partition: usize,
+
+    /// Sender State
+    is_requested: bool,
 }
 
 impl Stream for OnDemandPerPartitionStream {
@@ -490,17 +502,24 @@ impl Stream for OnDemandPerPartitionStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        if !self.sender.is_closed() {
+        // TODO: To be removed
+        debug!(
+            "On Demand Repartition per partition poll {}",
+            self.partition
+        );
+        if !self.sender.is_closed() && !self.is_requested {
             self.sender.send_blocking(self.partition).map_err(|e| {
                 internal_datafusion_err!(
                     "Error sending partition number to input partitions: {}",
                     e
                 )
             })?;
+            self.is_requested = true;
         }
 
         match ready!(self.receiver.recv().poll_unpin(cx)) {
             Some(Some(v)) => {
+                self.is_requested = false;
                 if let Ok(batch) = &v {
                     self.reservation
                         .lock()
@@ -510,10 +529,14 @@ impl Stream for OnDemandPerPartitionStream {
                 Poll::Ready(Some(v))
             }
             Some(None) => {
+                self.is_requested = false;
                 // Input partition has finished sending batches
                 Poll::Ready(None)
             }
-            None => Poll::Ready(None),
+            None => {
+                self.is_requested = false;
+                Poll::Ready(None)
+            }
         }
     }
 }
@@ -549,6 +572,9 @@ struct OnDemandRepartitionStream {
 
     /// Partition number
     partition: usize,
+
+    /// Sender state
+    is_requested: bool,
 }
 
 impl Stream for OnDemandRepartitionStream {
@@ -558,19 +584,28 @@ impl Stream for OnDemandRepartitionStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        // TODO: To be removed
+        debug!("On Demand Repartition poll {}", self.partition);
         loop {
             // Send partition number to input partitions
-            if !self.sender.is_closed() {
+            if !self.sender.is_closed() && !self.is_requested {
+                debug!(
+                    "On Demand Repartition poll {} sending partition",
+                    self.partition
+                );
                 self.sender.send_blocking(self.partition).map_err(|e| {
                     internal_datafusion_err!(
                         "Error sending partition number to input partitions: {}",
                         e
                     )
                 })?;
+                self.is_requested = true;
             }
 
             match ready!(self.input.recv().poll_unpin(cx)) {
                 Some(Some(v)) => {
+                    self.is_requested = false;
+
                     if let Ok(batch) = &v {
                         self.reservation
                             .lock()
@@ -581,6 +616,7 @@ impl Stream for OnDemandRepartitionStream {
                 }
                 Some(None) => {
                     self.num_input_partitions_processed += 1;
+                    self.is_requested = false;
 
                     if self.num_input_partitions == self.num_input_partitions_processed {
                         // all input partitions have finished sending batches
@@ -591,6 +627,8 @@ impl Stream for OnDemandRepartitionStream {
                     }
                 }
                 None => {
+                    self.is_requested = false;
+
                     return Poll::Ready(None);
                 }
             }
@@ -1023,18 +1061,13 @@ mod tests {
         )
         .unwrap()
     }
-}
 
-#[cfg(test)]
-mod test {
-    use arrow_schema::{DataType, Field, Schema, SortOptions};
+    use arrow_schema::SortOptions;
 
-    use crate::memory::MemoryExec;
+    use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::union::UnionExec;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
-
-    use super::*;
 
     /// Asserts that the plan is as expected
     ///
@@ -1126,10 +1159,6 @@ mod test {
         ];
         assert_plan!(expected_plan, exec);
         Ok(())
-    }
-
-    fn test_schema() -> Arc<Schema> {
-        Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
     }
 
     fn sort_exprs(schema: &Schema) -> LexOrdering {

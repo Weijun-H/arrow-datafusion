@@ -471,7 +471,11 @@ impl Stream for ObservedStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        // TODO: To be removed
+        debug!("Coalesce partitions poll ObservedStream");
         let poll = self.inner.poll_next_unpin(cx);
+        // TODO: To be removed
+        debug!("Coalesce partitions poll result {:?}", poll);
         self.baseline_metrics.record_poll(poll)
     }
 }

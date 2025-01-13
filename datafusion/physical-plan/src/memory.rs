@@ -17,6 +17,7 @@
 
 //! Execution plan for reading in-memory batches of data
 
+use log::debug;
 use parking_lot::RwLock;
 use std::any::Any;
 use std::fmt;
@@ -338,6 +339,8 @@ impl Stream for MemoryStream {
         mut self: std::pin::Pin<&mut Self>,
         _: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        // TODO: To be removed
+        debug!("Memory Stream poll");
         Poll::Ready(if self.index < self.data.len() {
             self.index += 1;
             let batch = &self.data[self.index - 1];
@@ -350,6 +353,8 @@ impl Stream for MemoryStream {
 
             Some(Ok(batch))
         } else {
+            // TODO: To be removed
+            debug!("Memory stream exhausted!");
             None
         })
     }
