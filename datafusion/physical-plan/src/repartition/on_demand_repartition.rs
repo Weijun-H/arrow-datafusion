@@ -58,6 +58,9 @@ use parking_lot::Mutex;
 #[derive(Debug, Clone)]
 pub struct OnDemandRepartitionExec {
     base: RepartitionExecBase,
+    /// Channel to send partition number to the downstream task
+    partition_channel:
+        Arc<tokio::sync::OnceCell<Mutex<(Sender<usize>, Receiver<usize>)>>>,
 }
 
 impl OnDemandRepartitionExec {
@@ -179,6 +182,7 @@ impl ExecutionPlan for OnDemandRepartitionExec {
         );
 
         let lazy_state = Arc::clone(&self.base.state);
+        let partition_channel = Arc::clone(&self.partition_channel);
         let input = Arc::clone(&self.base.input);
         let partitioning = self.partitioning().clone();
         let metrics = self.base.metrics.clone();
@@ -197,7 +201,14 @@ impl ExecutionPlan for OnDemandRepartitionExec {
             let metrics_captured = metrics.clone();
             let name_captured = name.clone();
             let context_captured = Arc::clone(&context);
-            let (partition_tx, partition_rx) = async_channel::unbounded();
+            let partition_channel = partition_channel
+                .get_or_init(|| async move { Mutex::new(async_channel::unbounded()) })
+                .await;
+            let (partition_tx, partition_rx) = {
+                let channel = partition_channel.lock();
+                (channel.0.clone(), channel.1.clone())
+            };
+
             let state = lazy_state
                 .get_or_init(|| async move {
                     Mutex::new(
@@ -324,6 +335,7 @@ impl OnDemandRepartitionExec {
                 preserve_order,
                 cache,
             },
+            partition_channel: Default::default(),
         })
     }
 
@@ -585,20 +597,23 @@ impl Stream for OnDemandRepartitionStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         // TODO: To be removed
-        debug!("On Demand Repartition poll {}", self.partition);
+        debug!(
+            "On Demand Repartition poll {}, start, is_requested {}",
+            self.partition, self.is_requested,
+        );
         loop {
             // Send partition number to input partitions
             if !self.sender.is_closed() && !self.is_requested {
-                debug!(
-                    "On Demand Repartition poll {} sending partition",
-                    self.partition
-                );
                 self.sender.send_blocking(self.partition).map_err(|e| {
                     internal_datafusion_err!(
                         "Error sending partition number to input partitions: {}",
                         e
                     )
                 })?;
+                debug!(
+                    "On Demand Repartition poll {}, send partition number",
+                    self.partition
+                );
                 self.is_requested = true;
             }
 
@@ -611,12 +626,19 @@ impl Stream for OnDemandRepartitionStream {
                             .lock()
                             .shrink(batch.get_array_memory_size());
                     }
-
+                    debug!(
+                        "On Demand Repartition poll {}, return batch",
+                        self.partition
+                    );
                     return Poll::Ready(Some(v));
                 }
                 Some(None) => {
                     self.num_input_partitions_processed += 1;
                     self.is_requested = false;
+                    debug!(
+                        "On Demand Repartition poll {}, input partitions processed: {}",
+                        self.partition, self.num_input_partitions_processed
+                    );
 
                     if self.num_input_partitions == self.num_input_partitions_processed {
                         // all input partitions have finished sending batches
@@ -627,6 +649,10 @@ impl Stream for OnDemandRepartitionStream {
                     }
                 }
                 None => {
+                    debug!(
+                        "On Demand Repartition poll {}, input partitions None",
+                        self.partition
+                    );
                     self.is_requested = false;
 
                     return Poll::Ready(None);
