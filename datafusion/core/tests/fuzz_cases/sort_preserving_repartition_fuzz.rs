@@ -43,6 +43,7 @@ mod sp_repartition_fuzz_tests {
         expressions::{col, Column},
         ConstExpr, PhysicalExpr, PhysicalSortExpr,
     };
+    use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
     use test_utils::add_empty_batches;
 
     use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -390,8 +391,14 @@ mod sp_repartition_fuzz_tests {
     fn sort_preserving_repartition_exec_round_robin(
         input: Arc<dyn ExecutionPlan>,
     ) -> Arc<dyn ExecutionPlan> {
+        // TODO: replaced with OnDemandRepartitionExec
+        // Arc::new(
+        //     RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2))
+        //         .unwrap()
+        //         .with_preserve_order(),
+        // )
         Arc::new(
-            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2))
+            OnDemandRepartitionExec::try_new(input, Partitioning::OnDemand(2))
                 .unwrap()
                 .with_preserve_order(),
         )
@@ -400,8 +407,12 @@ mod sp_repartition_fuzz_tests {
     fn repartition_exec_round_robin(
         input: Arc<dyn ExecutionPlan>,
     ) -> Arc<dyn ExecutionPlan> {
+        // TODO: replaced with OnDemandRepartitionExec
+        // Arc::new(
+        //     RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2)).unwrap(),
+        // )
         Arc::new(
-            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2)).unwrap(),
+            OnDemandRepartitionExec::try_new(input, Partitioning::OnDemand(2)).unwrap(),
         )
     }
 

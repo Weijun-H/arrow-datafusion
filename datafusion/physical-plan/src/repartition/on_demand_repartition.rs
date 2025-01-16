@@ -516,8 +516,8 @@ impl Stream for OnDemandPerPartitionStream {
     ) -> Poll<Option<Self::Item>> {
         // TODO: To be removed
         debug!(
-            "On Demand Repartition per partition poll {}",
-            self.partition
+            "On Demand Repartition per partition poll {}, start, is_requested {}",
+            self.partition, self.is_requested,
         );
         if !self.sender.is_closed() && !self.is_requested {
             self.sender.send_blocking(self.partition).map_err(|e| {
@@ -526,6 +526,10 @@ impl Stream for OnDemandPerPartitionStream {
                     e
                 )
             })?;
+            debug!(
+                "On Demand Repartition per partition poll {}, send partition number",
+                self.partition
+            );
             self.is_requested = true;
         }
 
@@ -537,15 +541,27 @@ impl Stream for OnDemandPerPartitionStream {
                         .lock()
                         .shrink(batch.get_array_memory_size());
                 }
+                debug!(
+                    "On Demand Repartition per partition poll {}, return batch",
+                    self.partition
+                );
 
                 Poll::Ready(Some(v))
             }
             Some(None) => {
                 self.is_requested = false;
                 // Input partition has finished sending batches
+                debug!(
+                    "On Demand Repartition per partition poll {}, input partitions finished",
+                    self.partition
+                );
                 Poll::Ready(None)
             }
             None => {
+                debug!(
+                    "On Demand Repartition per partition poll {}, input partitions None",
+                    self.partition
+                );
                 self.is_requested = false;
                 Poll::Ready(None)
             }
@@ -675,6 +691,8 @@ mod tests {
 
     use super::*;
     use crate::{
+        collect,
+        memory::MemoryExec,
         test::{
             assert_is_pending,
             exec::{
@@ -682,7 +700,6 @@ mod tests {
                 ErrorExec, MockExec,
             },
         },
-        {collect, memory::MemoryExec},
     };
 
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
@@ -1133,7 +1150,7 @@ mod tests {
 
         // Repartition should preserve order
         let expected_plan = [
-            "OnDemandRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2, preserve_order=true, sort_exprs=c0@0 ASC",
+            "OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=2, preserve_order=true, sort_exprs=c0@0 ASC",
             "  UnionExec",
             "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
             "    MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
@@ -1143,19 +1160,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_preserve_order_with_coalesce() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "my_awesome_field",
+            DataType::UInt32,
+            false,
+        )]));
+        let options = SortOptions::default();
+        let sort_exprs = LexOrdering::new(vec![PhysicalSortExpr {
+            expr: col("my_awesome_field", &schema).unwrap(),
+            options,
+        }]);
+
+        let batch = RecordBatch::try_from_iter(vec![(
+            "my_awesome_field",
+            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])) as ArrayRef,
+        )])?;
+
+        let source = Arc::new(
+            MemoryExec::try_new(&[vec![batch.clone()]], Arc::clone(&schema), None)
+                .unwrap()
+                .try_with_sort_information(vec![sort_exprs.clone()])
+                .unwrap(),
+        );
+
+        // output has multiple partitions, and is sorted
+        let union = UnionExec::new(vec![source.clone(), source]);
+        let repartition_exec =
+            OnDemandRepartitionExec::try_new(Arc::new(union), Partitioning::OnDemand(5))
+                .unwrap()
+                .with_preserve_order();
+
+        let coalesce_exec = CoalescePartitionsExec::new(
+            Arc::new(repartition_exec) as Arc<dyn ExecutionPlan>
+        );
+
+        // Repartition should preserve order
+        let expected_plan = [
+            "CoalescePartitionsExec",
+            "  OnDemandRepartitionExec: partitioning=OnDemand(5), input_partitions=2, preserve_order=true, sort_exprs=my_awesome_field@0 ASC",
+            "    UnionExec",
+            "      MemoryExec: partitions=1, partition_sizes=[1], output_ordering=my_awesome_field@0 ASC",
+            "      MemoryExec: partitions=1, partition_sizes=[1], output_ordering=my_awesome_field@0 ASC",
+        ];
+        assert_plan!(expected_plan, coalesce_exec.clone());
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let stream = coalesce_exec.execute(0, task_ctx)?;
+        let expected_batches = crate::common::collect(stream).await?;
+
+        let expected = vec![
+            "+------------------+",
+            "| my_awesome_field |",
+            "+------------------+",
+            "| 1                |",
+            "| 1                |",
+            "| 2                |",
+            "| 2                |",
+            "| 3                |",
+            "| 3                |",
+            "| 4                |",
+            "| 4                |",
+            "+------------------+",
+        ];
+
+        assert_batches_sorted_eq!(&expected, &expected_batches);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_preserve_order_one_partition() -> Result<()> {
         let schema = test_schema();
         let sort_exprs = sort_exprs(&schema);
         let source = sorted_memory_exec(&schema, sort_exprs);
         // output is sorted, but has only a single partition, so no need to sort
-        let exec =
-            OnDemandRepartitionExec::try_new(source, Partitioning::RoundRobinBatch(10))
-                .unwrap()
-                .with_preserve_order();
+        let exec = OnDemandRepartitionExec::try_new(source, Partitioning::OnDemand(10))
+            .unwrap()
+            .with_preserve_order();
 
         // Repartition should not preserve order
         let expected_plan = [
-            "OnDemandRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "  MemoryExec: partitions=1, partition_sizes=[0], output_ordering=c0@0 ASC",
         ];
         assert_plan!(expected_plan, exec);
@@ -1169,16 +1254,14 @@ mod tests {
         let source2 = memory_exec(&schema);
         // output has multiple partitions, but is not sorted
         let union = UnionExec::new(vec![source1, source2]);
-        let exec = OnDemandRepartitionExec::try_new(
-            Arc::new(union),
-            Partitioning::RoundRobinBatch(10),
-        )
-        .unwrap()
-        .with_preserve_order();
+        let exec =
+            OnDemandRepartitionExec::try_new(Arc::new(union), Partitioning::OnDemand(10))
+                .unwrap()
+                .with_preserve_order();
 
         // Repartition should not preserve order, as there is no order to preserve
         let expected_plan = [
-            "OnDemandRepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=2",
             "  UnionExec",
             "    MemoryExec: partitions=1, partition_sizes=[0]",
             "    MemoryExec: partitions=1, partition_sizes=[0]",

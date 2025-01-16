@@ -788,8 +788,10 @@ impl DefaultPhysicalPlanner {
                 let physical_input = children.one()?;
                 let input_dfschema = input.as_ref().schema();
                 let physical_partitioning = match partitioning_scheme {
-                    LogicalPartitioning::RoundRobinBatch(n) => {
-                        Partitioning::RoundRobinBatch(*n)
+                    LogicalPartitioning::RoundRobinBatch(n)
+                    | LogicalPartitioning::OnDemand(n) => {
+                        // TODO: replaced by OnDemand
+                        Partitioning::OnDemand(*n)
                     }
                     LogicalPartitioning::Hash(expr, n) => {
                         let runtime_expr = expr

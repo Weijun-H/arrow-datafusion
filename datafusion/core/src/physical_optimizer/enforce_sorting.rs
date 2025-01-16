@@ -548,6 +548,11 @@ fn remove_bottleneck_in_subplan(
         if let Partitioning::RoundRobinBatch(n_out) = repartition.partitioning() {
             can_remove |= *n_out == input_partitioning.partition_count();
         }
+        // TODO: replaced with OnDemand
+        if let Partitioning::OnDemand(n_out) = repartition.partitioning() {
+            can_remove |= *n_out == input_partitioning.partition_count();
+        }
+
         if can_remove {
             new_reqs = new_reqs.children.swap_remove(0)
         }

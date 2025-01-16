@@ -145,6 +145,7 @@ message RepartitionNode {
   oneof partition_method {
     uint64 round_robin = 2;
     HashRepartition hash = 3;
+    uint64 on_demand = 4;
   }
 }
 

@@ -516,6 +516,13 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                         "Partition Count": n
                     })
                 }
+                Partitioning::OnDemand(n) => {
+                    json!({
+                        "Node Type": "Repartition",
+                        "Partitioning Scheme": "OnDemand",
+                        "Partition Count": n
+                    })
+                }
                 Partitioning::Hash(expr, n) => {
                     let hash_expr: Vec<String> =
                         expr.iter().map(|e| format!("{e}")).collect();

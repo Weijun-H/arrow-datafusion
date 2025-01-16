@@ -415,7 +415,9 @@ impl LogicalPlan {
                 Partitioning::Hash(expr, _) | Partitioning::DistributeBy(expr) => {
                     expr.apply_elements(f)
                 }
-                Partitioning::RoundRobinBatch(_) => Ok(TreeNodeRecursion::Continue),
+                Partitioning::RoundRobinBatch(_) | Partitioning::OnDemand(_) => {
+                    Ok(TreeNodeRecursion::Continue)
+                }
             },
             LogicalPlan::Window(Window { window_expr, .. }) => {
                 window_expr.apply_elements(f)
@@ -527,7 +529,9 @@ impl LogicalPlan {
                 Partitioning::DistributeBy(expr) => expr
                     .map_elements(f)?
                     .update_data(Partitioning::DistributeBy),
-                Partitioning::RoundRobinBatch(_) => Transformed::no(partitioning_scheme),
+                Partitioning::RoundRobinBatch(_) | Partitioning::OnDemand(_) => {
+                    Transformed::no(partitioning_scheme)
+                }
             }
             .update_data(|partitioning_scheme| {
                 LogicalPlan::Repartition(Repartition {

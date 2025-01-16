@@ -835,6 +835,14 @@ impl LogicalPlan {
                         input: Arc::new(input),
                     }))
                 }
+                Partitioning::OnDemand(n) => {
+                    self.assert_no_expressions(expr)?;
+                    let input = self.only_input(inputs)?;
+                    Ok(LogicalPlan::Repartition(Repartition {
+                        partitioning_scheme: Partitioning::OnDemand(*n),
+                        input: Arc::new(input),
+                    }))
+                }
                 Partitioning::Hash(_, n) => {
                     let input = self.only_input(inputs)?;
                     Ok(LogicalPlan::Repartition(Repartition {
@@ -1912,6 +1920,9 @@ impl LogicalPlan {
                     }) => match partitioning_scheme {
                         Partitioning::RoundRobinBatch(n) => {
                             write!(f, "Repartition: RoundRobinBatch partition_count={n}")
+                        }
+                        Partitioning::OnDemand(n) => {
+                            write!(f, "Repartition: OnDemand partition_count={n}")
                         }
                         Partitioning::Hash(expr, n) => {
                             let hash_expr: Vec<String> =
@@ -3391,6 +3402,7 @@ pub enum Partitioning {
     Hash(Vec<Expr>, usize),
     /// The DISTRIBUTE BY clause is used to repartition the data based on the input expressions
     DistributeBy(Vec<Expr>),
+    OnDemand(usize),
 }
 
 /// Represent the unnesting operation on a list column, such as the recursion depth and

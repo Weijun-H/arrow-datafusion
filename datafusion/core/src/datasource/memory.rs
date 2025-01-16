@@ -45,6 +45,7 @@ use datafusion_expr::SortExpr;
 use datafusion_physical_plan::metrics::MetricsSet;
 
 use async_trait::async_trait;
+use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
 use futures::StreamExt;
 use log::debug;
 use parking_lot::Mutex;
@@ -165,9 +166,14 @@ impl MemTable {
         let exec = MemoryExec::try_new(&data, Arc::clone(&schema), None)?;
 
         if let Some(num_partitions) = output_partitions {
-            let exec = RepartitionExec::try_new(
+            // TODO: replaced with OnDemandRepartitionExec
+            // let exec = RepartitionExec::try_new(
+            //     Arc::new(exec),
+            //     Partitioning::RoundRobinBatch(num_partitions),
+            // )?;
+            let exec = OnDemandRepartitionExec::try_new(
                 Arc::new(exec),
-                Partitioning::RoundRobinBatch(num_partitions),
+                Partitioning::OnDemand(num_partitions),
             )?;
 
             // execute and collect results

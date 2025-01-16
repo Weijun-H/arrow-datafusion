@@ -323,12 +323,20 @@ pub fn global_limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan
 }
 
 pub fn repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10)).unwrap())
+    // TODO: replace with OnDemand
+    Arc::new(RepartitionExec::try_new(input, Partitioning::OnDemand(10)).unwrap())
+    // Arc::new(RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10)).unwrap())
 }
 
 pub fn spr_repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+    // TODO: replaced with OnDemand
+    // Arc::new(
+    //     RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10))
+    //         .unwrap()
+    //         .with_preserve_order(),
+    // )
     Arc::new(
-        RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10))
+        RepartitionExec::try_new(input, Partitioning::OnDemand(10))
             .unwrap()
             .with_preserve_order(),
     )

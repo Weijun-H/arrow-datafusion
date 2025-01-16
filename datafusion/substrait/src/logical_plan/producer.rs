@@ -551,6 +551,7 @@ pub fn to_substrait_rel(
             let partition_count = match repartition.partitioning_scheme {
                 Partitioning::RoundRobinBatch(num) => num,
                 Partitioning::Hash(_, num) => num,
+                Partitioning::OnDemand(num) => num,
                 Partitioning::DistributeBy(_) => {
                     return not_impl_err!(
                         "Physical plan does not support DistributeBy partitioning"
@@ -559,9 +560,10 @@ pub fn to_substrait_rel(
             };
             // ref: https://substrait.io/relations/physical_relations/#exchange-types
             let exchange_kind = match &repartition.partitioning_scheme {
-                Partitioning::RoundRobinBatch(_) => {
+                Partitioning::RoundRobinBatch(_) | Partitioning::OnDemand(_) => {
                     ExchangeKind::RoundRobin(RoundRobin::default())
                 }
+
                 Partitioning::Hash(exprs, _) => {
                     let fields = exprs
                         .iter()

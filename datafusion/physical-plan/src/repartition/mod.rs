@@ -766,6 +766,18 @@ impl ExecutionPlan for RepartitionExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        // TODO: make sure that this is only called for hash partitioning
+        // match self.partitioning() {
+        //     Partitioning::Hash(_, _) => {}
+        //     _ => {
+        //         panic!(
+        //             "RepartitionExec::execute should never be called directly. \
+        //         Partition type: {:?}",
+        //             self.partitioning()
+        //         );
+        //     }
+        // }
+
         trace!(
             "Start {}::execute for partition: {}",
             self.name(),
@@ -1772,7 +1784,8 @@ mod tests {
             MemoryExec::try_new(&partitions, Arc::clone(&schema), None).unwrap(),
         );
         let exec =
-            OnDemandRepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2)).unwrap();
+            OnDemandRepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2))
+                .unwrap();
 
         let coalesce_exec =
             CoalescePartitionsExec::new(Arc::new(exec) as Arc<dyn ExecutionPlan>);
@@ -1815,7 +1828,6 @@ mod tests {
         assert_plan!(expected_plan, exec);
         Ok(())
     }
-
 
     fn sort_exprs(schema: &Schema) -> LexOrdering {
         let options = SortOptions::default();

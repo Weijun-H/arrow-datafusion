@@ -17853,6 +17853,11 @@ impl serde::Serialize for RepartitionNode {
                 repartition_node::PartitionMethod::Hash(v) => {
                     struct_ser.serialize_field("hash", v)?;
                 }
+                repartition_node::PartitionMethod::OnDemand(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("onDemand", ToString::to_string(&v).as_str())?;
+                }
             }
         }
         struct_ser.end()
@@ -17869,6 +17874,8 @@ impl<'de> serde::Deserialize<'de> for RepartitionNode {
             "round_robin",
             "roundRobin",
             "hash",
+            "on_demand",
+            "onDemand",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -17876,6 +17883,7 @@ impl<'de> serde::Deserialize<'de> for RepartitionNode {
             Input,
             RoundRobin,
             Hash,
+            OnDemand,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -17900,6 +17908,7 @@ impl<'de> serde::Deserialize<'de> for RepartitionNode {
                             "input" => Ok(GeneratedField::Input),
                             "roundRobin" | "round_robin" => Ok(GeneratedField::RoundRobin),
                             "hash" => Ok(GeneratedField::Hash),
+                            "onDemand" | "on_demand" => Ok(GeneratedField::OnDemand),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -17941,6 +17950,12 @@ impl<'de> serde::Deserialize<'de> for RepartitionNode {
                             }
                             partition_method__ = map_.next_value::<::std::option::Option<_>>()?.map(repartition_node::PartitionMethod::Hash)
 ;
+                        }
+                        GeneratedField::OnDemand => {
+                            if partition_method__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("onDemand"));
+                            }
+                            partition_method__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| repartition_node::PartitionMethod::OnDemand(x.0));
                         }
                     }
                 }

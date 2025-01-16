@@ -33,6 +33,7 @@ use crate::{
 };
 
 use crate::protobuf::{proto_error, ToProtoError};
+use arrow::compute::kernels::partition;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::datasource::cte_worktable::CteWorkTable;
 #[cfg(feature = "parquet")]
@@ -516,8 +517,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                         from_proto::parse_exprs(pb_hash_expr, ctx, extension_codec)?,
                         *partition_count as usize,
                     ),
-                    PartitionMethod::RoundRobin(partition_count) => {
-                        Partitioning::RoundRobinBatch(*partition_count as usize)
+                    PartitionMethod::RoundRobin(partition_count)
+                    | PartitionMethod::OnDemand(partition_count) => {
+                        Partitioning::OnDemand(*partition_count as usize)
                     }
                 };
 
@@ -1371,8 +1373,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                             partition_count: *partition_count as u64,
                         })
                     }
-                    Partitioning::RoundRobinBatch(partition_count) => {
-                        PartitionMethod::RoundRobin(*partition_count as u64)
+                    Partitioning::RoundRobinBatch(partition_count)
+                    | Partitioning::OnDemand(partition_count) => {
+                        PartitionMethod::OnDemand(*partition_count as u64)
                     }
                     Partitioning::DistributeBy(_) => {
                         return not_impl_err!("DistributeBy")

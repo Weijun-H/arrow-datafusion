@@ -205,7 +205,7 @@ pub struct SortNode {
 pub struct RepartitionNode {
     #[prost(message, optional, boxed, tag = "1")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
-    #[prost(oneof = "repartition_node::PartitionMethod", tags = "2, 3")]
+    #[prost(oneof = "repartition_node::PartitionMethod", tags = "2, 3, 4")]
     pub partition_method: ::core::option::Option<repartition_node::PartitionMethod>,
 }
 /// Nested message and enum types in `RepartitionNode`.
@@ -216,6 +216,8 @@ pub mod repartition_node {
         RoundRobin(u64),
         #[prost(message, tag = "3")]
         Hash(super::HashRepartition),
+        #[prost(uint64, tag = "4")]
+        OnDemand(u64),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
