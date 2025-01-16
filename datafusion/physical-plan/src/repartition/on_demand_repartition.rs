@@ -806,7 +806,7 @@ mod tests {
     #[tokio::test]
     async fn many_to_many_on_demand_with_coalesce() -> Result<()> {
         let schema = test_schema();
-        let partition: Vec<RecordBatch> = create_vec_batches(1);
+        let partition: Vec<RecordBatch> = create_vec_batches(2);
         let partitions = vec![partition.clone(), partition.clone()];
         let input = Arc::new(
             MemoryExec::try_new(&partitions, Arc::clone(&schema), None).unwrap(),
@@ -820,7 +820,7 @@ mod tests {
         let expected_plan = [
             "CoalescePartitionsExec",
             "  OnDemandRepartitionExec: partitioning=OnDemand(3), input_partitions=2",
-            "    MemoryExec: partitions=2, partition_sizes=[1, 1]",
+            "    MemoryExec: partitions=2, partition_sizes=[2, 2]",
         ];
         assert_plan!(expected_plan, coalesce_exec.clone());
 
@@ -970,7 +970,7 @@ mod tests {
         let schema = batch1.schema();
         let expected_batches = vec![batch1.clone(), batch2.clone()];
         let input = MockExec::new(vec![Ok(batch1), Ok(batch2)], schema);
-        let partitioning = Partitioning::RoundRobinBatch(1);
+        let partitioning = Partitioning::OnDemand(1);
 
         let exec =
             OnDemandRepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
@@ -1143,7 +1143,7 @@ mod tests {
         let schema = test_schema();
         let partition = create_vec_batches(50);
         let input_partitions = vec![partition];
-        let partitioning = Partitioning::RoundRobinBatch(4);
+        let partitioning = Partitioning::OnDemand(4);
 
         // setup up context
         let runtime = RuntimeEnvBuilder::default()
@@ -1198,7 +1198,7 @@ mod tests {
         let union = UnionExec::new(vec![source1, source2]);
         let exec = OnDemandRepartitionExec::try_new(
             Arc::new(union),
-            Partitioning::RoundRobinBatch(10),
+            Partitioning::OnDemand(10),
         )
         .unwrap()
         .with_preserve_order();
