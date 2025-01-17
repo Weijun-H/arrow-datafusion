@@ -34,6 +34,7 @@ use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
 use datafusion_physical_plan::displayable;
+use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::ExecutionPlan;
 
@@ -122,7 +123,8 @@ fn final_aggregate_exec(
 }
 
 fn repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
-    Arc::new(RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10)).unwrap())
+    // Arc::new(RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10)).unwrap())
+    Arc::new(OnDemandRepartitionExec::try_new(input, Partitioning::OnDemand(10)).unwrap())
 }
 
 // Return appropriate expr depending if COUNT is for col or table (*)
@@ -157,7 +159,7 @@ fn aggregations_not_combined() -> datafusion_common::Result<()> {
     // should not combine the Partial/Final AggregateExecs
     let expected = &[
         "AggregateExec: mode=Final, gby=[], aggr=[COUNT(1)]",
-        "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+        "OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
         "AggregateExec: mode=Partial, gby=[], aggr=[COUNT(1)]",
         "ParquetExec: file_groups={1 group: [[x]]}, projection=[a, b, c]",
     ];

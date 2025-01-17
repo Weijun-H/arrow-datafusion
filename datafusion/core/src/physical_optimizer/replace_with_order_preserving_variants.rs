@@ -21,7 +21,7 @@
 
 use std::sync::Arc;
 
-use super::utils::{is_repartition, is_sort_preserving_merge};
+use super::utils::{is_on_demand_repartition, is_repartition, is_sort_preserving_merge};
 use crate::error::Result;
 use crate::physical_optimizer::utils::{is_coalesce_partitions, is_sort};
 use crate::physical_plan::repartition::RepartitionExec;
@@ -29,7 +29,9 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
+use datafusion_physical_expr::Partitioning;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::ExecutionPlanProperties;
 
@@ -55,6 +57,7 @@ pub fn update_children(opc: &mut OrderPreservationContext) {
             maintains_input_order[idx]
                 || is_coalesce_partitions(plan)
                 || is_repartition(plan)
+                || is_on_demand_repartition(plan)
         };
 
         // We cut the path towards nodes that do not maintain ordering.
@@ -66,7 +69,8 @@ pub fn update_children(opc: &mut OrderPreservationContext) {
         *data = if plan_children.is_empty() {
             false
         } else if !children[0].data
-            && ((is_repartition(plan) && !maintains_input_order[0])
+            && (((is_repartition(plan) || is_on_demand_repartition(plan))
+                && !maintains_input_order[0])
                 || (is_coalesce_partitions(plan)
                     && plan_children[0].output_ordering().is_some()))
         {
@@ -114,7 +118,7 @@ fn plan_with_order_preserving_variants(
         .collect::<Result<_>>()?;
     sort_input.data = false;
 
-    if is_repartition(&sort_input.plan)
+    if (is_repartition(&sort_input.plan) || is_on_demand_repartition(&sort_input.plan))
         && !sort_input.plan.maintains_input_order()[0]
         && is_spr_better
     {
@@ -181,7 +185,25 @@ fn plan_with_order_breaking_variants(
         // non-sort-preserving variant:
         let child = Arc::clone(&sort_input.children[0].plan);
         let partitioning = plan.output_partitioning().clone();
-        sort_input.plan = Arc::new(RepartitionExec::try_new(child, partitioning)?) as _;
+
+        // TODO: replaced with OnDemandRepartitionExec for RoundRobinBatch
+        match partitioning {
+            Partitioning::RoundRobinBatch(n) => {
+                sort_input.plan = Arc::new(OnDemandRepartitionExec::try_new(
+                    child,
+                    Partitioning::OnDemand(n),
+                )?) as _;
+            }
+            _ => {
+                sort_input.plan =
+                    Arc::new(RepartitionExec::try_new(child, partitioning)?) as _;
+            }
+        }
+    } else if is_on_demand_repartition(plan) && plan.maintains_input_order()[0] {
+        let child = Arc::clone(&sort_input.children[0].plan);
+        let partitioning = plan.output_partitioning().clone();
+        sort_input.plan =
+            Arc::new(OnDemandRepartitionExec::try_new(child, partitioning)?) as _;
     } else if is_sort_preserving_merge(plan) {
         // Replace `SortPreservingMergeExec` with a `CoalescePartitionsExec`:
         let child = Arc::clone(&sort_input.children[0].plan);
@@ -437,14 +459,14 @@ mod tests {
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
         let expected_input_bounded = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
 
@@ -452,7 +474,7 @@ mod tests {
         let expected_optimized_unbounded = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "    OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "      StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
 
@@ -461,13 +483,13 @@ mod tests {
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "    OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
@@ -519,11 +541,11 @@ mod tests {
             "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
             "            CoalescePartitionsExec",
             "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "                OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "                  StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC]",
         ];
         let expected_input_bounded = [
@@ -531,11 +553,11 @@ mod tests {
             "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
             "            CoalescePartitionsExec",
             "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "                OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "                  CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC], has_header=true",
         ];
 
@@ -544,10 +566,10 @@ mod tests {
             "SortPreservingMergeExec: [a@0 ASC]",
             "  FilterExec: c@1 > 3",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        SortPreservingMergeExec: [a@0 ASC]",
             "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "            OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "              StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC]",
         ];
 
@@ -557,21 +579,21 @@ mod tests {
             "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
             "            CoalescePartitionsExec",
             "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "                OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "                  CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC], has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC]",
             "  FilterExec: c@1 > 3",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        SortPreservingMergeExec: [a@0 ASC]",
             "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "            OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC], has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
@@ -612,7 +634,7 @@ mod tests {
             "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      FilterExec: c@1 > 3",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
         let expected_input_bounded =  [
@@ -620,7 +642,7 @@ mod tests {
             "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      FilterExec: c@1 > 3",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
 
@@ -629,7 +651,7 @@ mod tests {
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
 
@@ -639,14 +661,14 @@ mod tests {
             "  SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "      FilterExec: c@1 > 3",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "    FilterExec: c@1 > 3",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
@@ -689,7 +711,7 @@ mod tests {
             "    CoalesceBatchesExec: target_batch_size=8192",
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
         let expected_input_bounded = [
@@ -698,7 +720,7 @@ mod tests {
             "    CoalesceBatchesExec: target_batch_size=8192",
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
 
@@ -708,7 +730,7 @@ mod tests {
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
 
@@ -719,7 +741,7 @@ mod tests {
             "    CoalesceBatchesExec: target_batch_size=8192",
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
@@ -727,7 +749,7 @@ mod tests {
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
@@ -773,7 +795,7 @@ mod tests {
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          CoalesceBatchesExec: target_batch_size=8192",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "            OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "              StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
         let expected_input_bounded = [
@@ -783,7 +805,7 @@ mod tests {
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          CoalesceBatchesExec: target_batch_size=8192",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "            OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
 
@@ -794,7 +816,7 @@ mod tests {
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "        CoalesceBatchesExec: target_batch_size=8192",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
 
@@ -806,7 +828,7 @@ mod tests {
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
             "          CoalesceBatchesExec: target_batch_size=8192",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "            OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
@@ -815,7 +837,7 @@ mod tests {
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
             "        CoalesceBatchesExec: target_batch_size=8192",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
@@ -856,7 +878,7 @@ mod tests {
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
         let expected_input_bounded = [
@@ -864,7 +886,7 @@ mod tests {
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
 
@@ -874,7 +896,7 @@ mod tests {
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
 
@@ -884,7 +906,7 @@ mod tests {
             "  CoalesceBatchesExec: target_batch_size=8192",
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
@@ -931,7 +953,7 @@ mod tests {
             "      CoalesceBatchesExec: target_batch_size=8192",
             "        FilterExec: c@1 > 3",
             "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "            OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "              StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
         let expected_input_bounded = [
@@ -941,7 +963,7 @@ mod tests {
             "      CoalesceBatchesExec: target_batch_size=8192",
             "        FilterExec: c@1 > 3",
             "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "            OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
 
@@ -952,7 +974,7 @@ mod tests {
             "    CoalesceBatchesExec: target_batch_size=8192",
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
 
@@ -964,7 +986,7 @@ mod tests {
             "      CoalesceBatchesExec: target_batch_size=8192",
             "        FilterExec: c@1 > 3",
             "          RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "            RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "            OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "              CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
@@ -973,7 +995,7 @@ mod tests {
             "    CoalesceBatchesExec: target_batch_size=8192",
             "      FilterExec: c@1 > 3",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
@@ -1018,14 +1040,14 @@ mod tests {
             "SortPreservingMergeExec: [c@1 ASC]",
             "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
         let expected_input_bounded = [
             "SortPreservingMergeExec: [c@1 ASC]",
             "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
 
@@ -1034,7 +1056,7 @@ mod tests {
             "SortPreservingMergeExec: [c@1 ASC]",
             "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
 
@@ -1043,7 +1065,7 @@ mod tests {
             "SortPreservingMergeExec: [c@1 ASC]",
             "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
@@ -1083,14 +1105,14 @@ mod tests {
             "SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]",
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
         let expected_input_bounded = [
             "SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]",
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
 
@@ -1098,7 +1120,7 @@ mod tests {
         let expected_optimized_unbounded = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "    OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "      StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
 
@@ -1107,13 +1129,13 @@ mod tests {
             "SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]",
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [a@0 ASC NULLS LAST]",
             "  RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=a@0 ASC NULLS LAST",
-            "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "    OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
@@ -1165,11 +1187,11 @@ mod tests {
             "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          SortExec: expr=[c@1 ASC], preserve_partitioning=[false]",
             "            CoalescePartitionsExec",
             "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "                OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "                  StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
         let expected_input_bounded = [
@@ -1177,11 +1199,11 @@ mod tests {
             "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          SortExec: expr=[c@1 ASC], preserve_partitioning=[false]",
             "            CoalescePartitionsExec",
             "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "                OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "                  CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
 
@@ -1190,11 +1212,11 @@ mod tests {
             "SortPreservingMergeExec: [c@1 ASC]",
             "  FilterExec: c@1 > 3",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=c@1 ASC",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        SortExec: expr=[c@1 ASC], preserve_partitioning=[false]",
             "          CoalescePartitionsExec",
             "            RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "              OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "                StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
 
@@ -1204,22 +1226,22 @@ mod tests {
             "  SortExec: expr=[c@1 ASC], preserve_partitioning=[true]",
             "    FilterExec: c@1 > 3",
             "      RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "          SortExec: expr=[c@1 ASC], preserve_partitioning=[false]",
             "            CoalescePartitionsExec",
             "              RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "                RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "                OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "                  CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = [
             "SortPreservingMergeExec: [c@1 ASC]",
             "  FilterExec: c@1 > 3",
             "    RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8, preserve_order=true, sort_exprs=c@1 ASC",
-            "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "        SortExec: expr=[c@1 ASC], preserve_partitioning=[false]",
             "          CoalescePartitionsExec",
             "            RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "              RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "              OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "                CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         assert_optimized_in_all_boundedness_situations!(
@@ -1283,11 +1305,11 @@ mod tests {
             "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
         let expected_input_bounded = [
@@ -1296,11 +1318,11 @@ mod tests {
             "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
 
@@ -1311,11 +1333,11 @@ mod tests {
             "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            StreamingTableExec: partition_sizes=1, projection=[a, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST]",
         ];
 
@@ -1327,11 +1349,11 @@ mod tests {
             "    HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c@1, c@1)]",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
             "      CoalesceBatchesExec: target_batch_size=4096",
             "        RepartitionExec: partitioning=Hash([c@1], 8), input_partitions=8",
-            "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
             "            CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, c, d], output_ordering=[a@0 ASC NULLS LAST], has_header=true",
         ];
         let expected_optimized_bounded_sort_preserve = expected_optimized_bounded;
@@ -1398,8 +1420,11 @@ mod tests {
     fn repartition_exec_round_robin(
         input: Arc<dyn ExecutionPlan>,
     ) -> Arc<dyn ExecutionPlan> {
+        // Arc::new(
+        //     RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(8)).unwrap(),
+        // )
         Arc::new(
-            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(8)).unwrap(),
+            OnDemandRepartitionExec::try_new(input, Partitioning::OnDemand(8)).unwrap(),
         )
     }
 

@@ -530,7 +530,7 @@ impl Stream for OnDemandPerPartitionStream {
                 "On Demand Repartition per partition poll {}, send partition number",
                 self.partition
             );
-            self.is_requested = true;
+            // self.is_requested = true;
         }
 
         match ready!(self.receiver.recv().poll_unpin(cx)) {
@@ -836,18 +836,34 @@ mod tests {
             "+----+",
             "| 1  |",
             "| 1  |",
+            "| 1  |",
+            "| 1  |",
+            "| 2  |",
+            "| 2  |",
             "| 2  |",
             "| 2  |",
             "| 3  |",
             "| 3  |",
+            "| 3  |",
+            "| 3  |",
+            "| 4  |",
+            "| 4  |",
             "| 4  |",
             "| 4  |",
             "| 5  |",
             "| 5  |",
+            "| 5  |",
+            "| 5  |",
+            "| 6  |",
+            "| 6  |",
             "| 6  |",
             "| 6  |",
             "| 7  |",
             "| 7  |",
+            "| 7  |",
+            "| 7  |",
+            "| 8  |",
+            "| 8  |",
             "| 8  |",
             "| 8  |",
             "+----+",
@@ -897,7 +913,7 @@ mod tests {
 
         let task_ctx = Arc::new(TaskContext::default());
         let input = ErrorExec::new();
-        let partitioning = Partitioning::RoundRobinBatch(1);
+        let partitioning = Partitioning::OnDemand(1);
         let exec =
             OnDemandRepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
 
@@ -931,7 +947,7 @@ mod tests {
 
         let schema = batch.schema();
         let input = MockExec::new(vec![Ok(batch), err], schema);
-        let partitioning = Partitioning::RoundRobinBatch(1);
+        let partitioning = Partitioning::OnDemand(1);
         let exec =
             OnDemandRepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
 
@@ -1196,12 +1212,10 @@ mod tests {
         let source2 = sorted_memory_exec(&schema, sort_exprs);
         // output has multiple partitions, and is sorted
         let union = UnionExec::new(vec![source1, source2]);
-        let exec = OnDemandRepartitionExec::try_new(
-            Arc::new(union),
-            Partitioning::OnDemand(10),
-        )
-        .unwrap()
-        .with_preserve_order();
+        let exec =
+            OnDemandRepartitionExec::try_new(Arc::new(union), Partitioning::OnDemand(10))
+                .unwrap()
+                .with_preserve_order();
 
         // Repartition should preserve order
         let expected_plan = [

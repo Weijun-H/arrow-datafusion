@@ -601,7 +601,7 @@ logical_plan
 05)--------TableScan: recursive_unnest_table projection=[column3]
 physical_plan
 01)UnnestExec
-02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+02)--OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 03)----ProjectionExec: expr=[__unnest_placeholder(recursive_unnest_table.column3,depth=1)@0 as __unnest_placeholder(UNNEST(recursive_unnest_table.column3)), column3@1 as column3]
 04)------UnnestExec
 05)--------ProjectionExec: expr=[column3@0 as __unnest_placeholder(recursive_unnest_table.column3), column3@0 as column3]
@@ -660,7 +660,7 @@ physical_plan
 01)ProjectionExec: expr=[__unnest_placeholder(UNNEST(recursive_unnest_table.column3)[c1],depth=2)@0 as UNNEST(UNNEST(UNNEST(recursive_unnest_table.column3)[c1])), column3@1 as column3]
 02)--UnnestExec
 03)----ProjectionExec: expr=[get_field(__unnest_placeholder(recursive_unnest_table.column3,depth=1)@0, c1) as __unnest_placeholder(UNNEST(recursive_unnest_table.column3)[c1]), column3@1 as column3]
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 05)--------UnnestExec
 06)----------ProjectionExec: expr=[column3@0 as __unnest_placeholder(recursive_unnest_table.column3), column3@0 as column3]
 07)------------MemoryExec: partitions=1, partition_sizes=[1]

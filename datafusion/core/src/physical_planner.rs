@@ -84,6 +84,7 @@ use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctio
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
+use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
 use datafusion_physical_plan::unnest::ListUnnest;
 use datafusion_sql::utils::window_expr_common_partition_keys;
 
@@ -791,7 +792,11 @@ impl DefaultPhysicalPlanner {
                     LogicalPartitioning::RoundRobinBatch(n)
                     | LogicalPartitioning::OnDemand(n) => {
                         // TODO: replaced by OnDemand
-                        Partitioning::OnDemand(*n)
+
+                        return Ok(Arc::new(OnDemandRepartitionExec::try_new(
+                            physical_input,
+                            Partitioning::OnDemand(*n),
+                        )?));
                     }
                     LogicalPartitioning::Hash(expr, n) => {
                         let runtime_expr = expr

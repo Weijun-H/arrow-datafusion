@@ -51,6 +51,7 @@ use datafusion_physical_expr::{
     utils::collect_columns, Partitioning, PhysicalExpr, PhysicalExprRef,
     PhysicalSortExpr, PhysicalSortRequirement,
 };
+use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
 use datafusion_physical_plan::streaming::StreamingTableExec;
 use datafusion_physical_plan::union::UnionExec;
 
@@ -130,6 +131,10 @@ pub fn remove_unnecessary_projections(
             )?
         } else if let Some(repartition) = input.downcast_ref::<RepartitionExec>() {
             try_swapping_with_repartition(projection, repartition)?
+        } else if let Some(on_demand_repartition) =
+            input.downcast_ref::<OnDemandRepartitionExec>()
+        {
+            try_swapping_with_on_demand_repartition(projection, on_demand_repartition)?
         } else if let Some(sort) = input.downcast_ref::<SortExec>() {
             try_swapping_with_sort(projection, sort)?
         } else if let Some(spm) = input.downcast_ref::<SortPreservingMergeExec>() {
@@ -411,6 +416,34 @@ fn try_swapping_with_filter(
             e.with_default_selectivity(selectivity)
         })
         .map(|e| Some(Arc::new(e) as _))
+}
+
+/// Tries to swap the projection with its input [`RepartitionExec`]. If it can be done,
+/// it returns the new swapped version having the [`RepartitionExec`] as the top plan.
+/// Otherwise, it returns None.
+fn try_swapping_with_on_demand_repartition(
+    projection: &ProjectionExec,
+    repartition: &OnDemandRepartitionExec,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    // If the projection does not narrow the schema, we should not try to push it down.
+    if projection.expr().len() >= projection.input().schema().fields().len() {
+        return Ok(None);
+    }
+
+    // If pushdown is not beneficial or applicable, break it.
+    if projection.benefits_from_input_partitioning()[0] || !all_columns(projection.expr())
+    {
+        return Ok(None);
+    }
+
+    let new_projection = make_with_child(projection, repartition.input())?;
+
+    let new_partitioning = repartition.partitioning().clone();
+
+    Ok(Some(Arc::new(OnDemandRepartitionExec::try_new(
+        new_projection,
+        new_partitioning,
+    )?)))
 }
 
 /// Tries to swap the projection with its input [`RepartitionExec`]. If it can be done,

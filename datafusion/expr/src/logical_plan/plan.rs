@@ -55,6 +55,7 @@ use datafusion_common::{
     UnnestOptions,
 };
 use indexmap::IndexSet;
+use sqlparser::ast::Partition;
 
 // backwards compatibility
 use crate::display::PgJsonVisitor;
@@ -827,15 +828,7 @@ impl LogicalPlan {
                 partitioning_scheme,
                 ..
             }) => match partitioning_scheme {
-                Partitioning::RoundRobinBatch(n) => {
-                    self.assert_no_expressions(expr)?;
-                    let input = self.only_input(inputs)?;
-                    Ok(LogicalPlan::Repartition(Repartition {
-                        partitioning_scheme: Partitioning::RoundRobinBatch(*n),
-                        input: Arc::new(input),
-                    }))
-                }
-                Partitioning::OnDemand(n) => {
+                Partitioning::RoundRobinBatch(n) | Partitioning::OnDemand(n) => {
                     self.assert_no_expressions(expr)?;
                     let input = self.only_input(inputs)?;
                     Ok(LogicalPlan::Repartition(Repartition {

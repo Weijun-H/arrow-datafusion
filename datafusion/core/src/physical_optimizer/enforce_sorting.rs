@@ -37,7 +37,7 @@
 
 use std::sync::Arc;
 
-use super::utils::{add_sort_above, add_sort_above_with_check};
+use super::utils::{add_sort_above, add_sort_above_with_check, is_on_demand_repartition};
 use crate::config::ConfigOptions;
 use crate::error::Result;
 use crate::physical_optimizer::replace_with_order_preserving_variants::{
@@ -65,6 +65,7 @@ use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::partial_sort::PartialSortExec;
 use datafusion_physical_plan::ExecutionPlanProperties;
@@ -520,8 +521,9 @@ fn remove_bottleneck_in_subplan(
         // We can safely use the 0th index since we have a `CoalescePartitionsExec`.
         let mut new_child_node = children[0].children.swap_remove(0);
         while new_child_node.plan.output_partitioning() == plan.output_partitioning()
-            && is_repartition(&new_child_node.plan)
-            && is_repartition(plan)
+            && (is_repartition(&new_child_node.plan)
+                || is_on_demand_repartition(&new_child_node.plan))
+            && (is_repartition(plan) || is_on_demand_repartition(plan))
         {
             new_child_node = new_child_node.children.swap_remove(0)
         }
@@ -548,11 +550,21 @@ fn remove_bottleneck_in_subplan(
         if let Partitioning::RoundRobinBatch(n_out) = repartition.partitioning() {
             can_remove |= *n_out == input_partitioning.partition_count();
         }
-        // TODO: replaced with OnDemand
+        if can_remove {
+            new_reqs = new_reqs.children.swap_remove(0)
+        }
+    } else if let Some(repartition) = new_reqs
+        .plan
+        .as_any()
+        .downcast_ref::<OnDemandRepartitionExec>()
+    {
+        let input_partitioning = repartition.input().output_partitioning();
+        // We can remove this repartitioning operator if it is now a no-op:
+        let mut can_remove = input_partitioning.eq(repartition.partitioning());
+        // We can also remove it if we ended up with an ineffective RR:
         if let Partitioning::OnDemand(n_out) = repartition.partitioning() {
             can_remove |= *n_out == input_partitioning.partition_count();
         }
-
         if can_remove {
             new_reqs = new_reqs.children.swap_remove(0)
         }
@@ -615,6 +627,13 @@ fn remove_corresponding_sort_from_sub_plan(
         if is_sort_preserving_merge(&node.plan) {
             node.children = node.children.swap_remove(0).children;
             node.plan = Arc::clone(node.plan.children().swap_remove(0));
+        } else if let Some(repartition) =
+            node.plan.as_any().downcast_ref::<OnDemandRepartitionExec>()
+        {
+            node.plan = Arc::new(OnDemandRepartitionExec::try_new(
+                Arc::clone(&node.children[0].plan),
+                repartition.properties().output_partitioning().clone(),
+            )?) as _;
         } else if let Some(repartition) =
             node.plan.as_any().downcast_ref::<RepartitionExec>()
         {
@@ -948,8 +967,8 @@ mod tests {
         let physical_plan = repartition_exec(repartition_exec(sort3));
 
         let expected_input = [
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
-            "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=10",
+            "  OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
             "      SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
             "        SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[false]",
@@ -959,8 +978,8 @@ mod tests {
         ];
 
         let expected_optimized = [
-            "RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
-            "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=10",
+            "  OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "    MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
@@ -996,7 +1015,7 @@ mod tests {
             "AggregateExec: mode=Final, gby=[], aggr=[]",
             "  SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
             "    SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[true]",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "        SortPreservingMergeExec: [non_nullable_col@1 ASC]",
             "          SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[false]",
             "            MemoryExec: partitions=1, partition_sizes=[0]",
@@ -1005,7 +1024,7 @@ mod tests {
         let expected_optimized = [
             "AggregateExec: mode=Final, gby=[], aggr=[]",
             "  CoalescePartitionsExec",
-            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "    OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "      MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
@@ -1049,18 +1068,18 @@ mod tests {
             "    SortPreservingMergeExec: [non_nullable_col@1 ASC]",
             "      SortExec: expr=[non_nullable_col@1 ASC], preserve_partitioning=[true]",
             "        UnionExec",
-            "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "            MemoryExec: partitions=1, partition_sizes=[0]",
-            "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "            MemoryExec: partitions=1, partition_sizes=[0]"];
 
         let expected_optimized = ["SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
             "  SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[true]",
             "    FilterExec: NOT non_nullable_col@1",
             "      UnionExec",
-            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "          MemoryExec: partitions=1, partition_sizes=[0]",
-            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "          MemoryExec: partitions=1, partition_sizes=[0]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -1275,7 +1294,7 @@ mod tests {
         let physical_plan = sort_preserving_merge_exec(sort_exprs, repartition);
 
         let expected_input = ["SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
-            "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "  OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=2",
             "    UnionExec",
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]",
             "      GlobalLimitExec: skip=0, fetch=100",
@@ -1286,7 +1305,7 @@ mod tests {
         // We should keep the bottom `SortExec`.
         let expected_optimized = ["SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
             "  SortExec: expr=[nullable_col@0 ASC, non_nullable_col@1 ASC], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=2",
+            "    OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=2",
             "      UnionExec",
             "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]",
             "        GlobalLimitExec: skip=0, fetch=100",
@@ -1610,7 +1629,7 @@ mod tests {
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]",
             "    SortPreservingMergeExec: [nullable_col@0 ASC, non_nullable_col@1 ASC]",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         // Should adjust the requirement in the third input of the union so
         // that it is not unnecessarily fine.
@@ -1620,7 +1639,7 @@ mod tests {
             "      ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]",
             "    ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col], output_ordering=[nullable_col@0 ASC]",
             "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[true]",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -2120,12 +2139,12 @@ mod tests {
         let expected_input = ["SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
             "  FilterExec: NOT non_nullable_col@1",
             "    CoalescePartitionsExec",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         let expected_optimized = ["SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[true]",
             "    FilterExec: NOT non_nullable_col@1",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "        ParquetExec: file_groups={1 group: [[x]]}, projection=[nullable_col, non_nullable_col]"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -2154,7 +2173,7 @@ mod tests {
         let actual = get_plan_string(&orig_plan);
         let expected_input = vec![
             "SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
-            "  RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "  OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "    BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
             "      MemoryExec: partitions=1, partition_sizes=[0]",
         ];
@@ -2210,14 +2229,14 @@ mod tests {
         let expected_input = ["SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[false]",
             "  SortPreservingMergeExec: [nullable_col@0 ASC]",
             "    SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[true]",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "        CoalescePartitionsExec",
-            "          RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "          OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "            MemoryExec: partitions=1, partition_sizes=[0]"];
         let expected_optimized = [
             "SortPreservingMergeExec: [nullable_col@0 ASC]",
             "  SortExec: expr=[nullable_col@0 ASC], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "    OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "      MemoryExec: partitions=1, partition_sizes=[0]",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
@@ -2241,12 +2260,12 @@ mod tests {
         let expected_input = ["SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=false"];
         let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC]",
             "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=false"];
         assert_optimized!(expected_input, expected_optimized, physical_plan, true);
 
@@ -2279,14 +2298,14 @@ mod tests {
             "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "        StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]",
         ];
         let expected_input_bounded = vec![
             "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=true",
         ];
 
@@ -2294,7 +2313,7 @@ mod tests {
         let expected_optimized_unbounded = vec![
             "SortPreservingMergeExec: [a@0 ASC]",
             "  RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC",
-            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "    OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "      StreamingTableExec: partition_sizes=1, projection=[a, b, c, d, e], infinite_source=true, output_ordering=[a@0 ASC]",
         ];
 
@@ -2303,14 +2322,14 @@ mod tests {
             "SortExec: expr=[a@0 ASC], preserve_partitioning=[false]",
             "  CoalescePartitionsExec",
             "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=true",
         ];
         let expected_optimized_bounded_parallelize_sort = vec![
             "SortPreservingMergeExec: [a@0 ASC]",
             "  SortExec: expr=[a@0 ASC], preserve_partitioning=[true]",
             "    RepartitionExec: partitioning=Hash([c@2], 10), input_partitions=10",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "        CsvExec: file_groups={1 group: [[file_path]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC], has_header=true",
         ];
         let (expected_input, expected_optimized, expected_optimized_sort_parallelize) =
@@ -2354,11 +2373,11 @@ mod tests {
 
         let expected_input = ["SortExec: expr=[b@1 ASC], preserve_partitioning=[false]",
             "  SortPreservingMergeExec: [a@0 ASC, b@1 ASC]",
-            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "    OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
         let expected_optimized = ["SortExec: expr=[b@1 ASC], preserve_partitioning=[false]",
             "  SortPreservingMergeExec: [a@0 ASC, b@1 ASC]",
-            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "    OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
         assert_optimized!(expected_input, expected_optimized, physical_plan, false);
 
@@ -2383,11 +2402,11 @@ mod tests {
 
         let expected_input = ["SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[false]",
             "  SortPreservingMergeExec: [a@0 ASC, b@1 ASC]",
-            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "    OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
         let expected_optimized = ["SortPreservingMergeExec: [a@0 ASC, b@1 ASC]",
             "  SortExec: expr=[a@0 ASC, b@1 ASC, c@2 ASC], preserve_partitioning=[true]",
-            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "    OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "      CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], output_ordering=[a@0 ASC, b@1 ASC], has_header=false",];
         assert_optimized!(expected_input, expected_optimized, physical_plan, false);
 
@@ -2409,8 +2428,8 @@ mod tests {
         let expected_input = [
             "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
             "  SortPreservingMergeExec: [a@0 ASC, b@1 ASC]",
-            "    RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC, b@1 ASC",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "    OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=10, preserve_order=true, sort_exprs=a@0 ASC, b@1 ASC",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "        SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]",
             "          CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
@@ -2418,8 +2437,8 @@ mod tests {
             "BoundedWindowAggExec: wdw=[count: Ok(Field { name: \"count\", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(NULL), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]",
             "  SortExec: expr=[a@0 ASC, b@1 ASC], preserve_partitioning=[false]",
             "    CoalescePartitionsExec",
-            "      RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=10",
-            "        RepartitionExec: partitioning=RoundRobinBatch(10), input_partitions=1",
+            "      OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=10",
+            "        OnDemandRepartitionExec: partitioning=OnDemand(10), input_partitions=1",
             "          CsvExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], has_header=false",
         ];
         assert_optimized!(expected_input, expected_optimized, physical_plan, false);

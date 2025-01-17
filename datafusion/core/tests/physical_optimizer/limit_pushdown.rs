@@ -31,6 +31,7 @@ use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::projection::ProjectionExec;
+use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
@@ -121,7 +122,7 @@ fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limi
         "    LocalLimitExec: fetch=5",
         "      CoalesceBatchesExec: target_batch_size=8192",
         "        FilterExec: c3@2 > 0",
-        "          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "          OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
         "            StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
     ];
     assert_eq!(initial, expected_initial);
@@ -134,7 +135,7 @@ fn transforms_coalesce_batches_exec_into_fetching_version_and_removes_local_limi
         "  CoalescePartitionsExec",
         "    CoalesceBatchesExec: target_batch_size=8192, fetch=5",
         "      FilterExec: c3@2 > 0",
-        "        RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "        OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
         "          StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
     ];
     assert_eq!(get_plan_string(&after_optimize), expected);
@@ -227,7 +228,7 @@ fn pushes_global_limit_into_multiple_fetch_plans() -> datafusion_common::Result<
         "GlobalLimitExec: skip=0, fetch=5",
         "  SortPreservingMergeExec: [c1@0 ASC]",
         "    SortExec: expr=[c1@0 ASC], preserve_partitioning=[false]",
-        "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
         "        ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
         "          CoalesceBatchesExec: target_batch_size=8192",
         "            StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
@@ -241,7 +242,7 @@ fn pushes_global_limit_into_multiple_fetch_plans() -> datafusion_common::Result<
     let expected = [
         "SortPreservingMergeExec: [c1@0 ASC], fetch=5",
         "  SortExec: TopK(fetch=5), expr=[c1@0 ASC], preserve_partitioning=[false]",
-        "    RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "    OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
         "      ProjectionExec: expr=[c1@0 as c1, c2@1 as c2, c3@2 as c3]",
         "        CoalesceBatchesExec: target_batch_size=8192",
         "          StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
@@ -266,7 +267,7 @@ fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions(
         "GlobalLimitExec: skip=0, fetch=5",
         "  CoalescePartitionsExec",
         "    FilterExec: c3@2 > 0",
-        "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
         "        StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
     ];
     assert_eq!(initial, expected_initial);
@@ -278,7 +279,7 @@ fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions(
         "GlobalLimitExec: skip=0, fetch=5",
         "  CoalescePartitionsExec",
         "    FilterExec: c3@2 > 0",
-        "      RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1",
+        "      OnDemandRepartitionExec: partitioning=OnDemand(8), input_partitions=1",
         "        StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true"
     ];
     assert_eq!(get_plan_string(&after_optimize), expected);
@@ -479,9 +480,13 @@ fn coalesce_partitions_exec(
 fn repartition_exec(
     streaming_table: Arc<dyn ExecutionPlan>,
 ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-    Ok(Arc::new(RepartitionExec::try_new(
+    // Ok(Arc::new(RepartitionExec::try_new(
+    //     streaming_table,
+    //     Partitioning::RoundRobinBatch(8),
+    // )?))
+    Ok(Arc::new(OnDemandRepartitionExec::try_new(
         streaming_table,
-        Partitioning::RoundRobinBatch(8),
+        Partitioning::OnDemand(8),
     )?))
 }
 

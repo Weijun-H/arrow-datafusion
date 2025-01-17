@@ -345,6 +345,7 @@ mod tests {
     use crate::expressions::col;
     use crate::memory::MemoryExec;
     use crate::metrics::{MetricValue, Timestamp};
+    use crate::repartition::on_demand_repartition::OnDemandRepartitionExec;
     use crate::repartition::RepartitionExec;
     use crate::sorts::sort::SortExec;
     use crate::stream::RecordBatchReceiverStream;

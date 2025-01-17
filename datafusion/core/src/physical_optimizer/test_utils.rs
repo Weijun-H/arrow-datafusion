@@ -51,6 +51,7 @@ use datafusion_expr::{WindowFrame, WindowFunctionDefinition};
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_physical_expr::expressions::col;
 use datafusion_physical_expr::{PhysicalExpr, PhysicalSortExpr};
+use datafusion_physical_plan::repartition::on_demand_repartition::OnDemandRepartitionExec;
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::{
     displayable, DisplayAs, DisplayFormatType, PlanProperties,
@@ -324,7 +325,7 @@ pub fn global_limit_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan
 
 pub fn repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
     // TODO: replace with OnDemand
-    Arc::new(RepartitionExec::try_new(input, Partitioning::OnDemand(10)).unwrap())
+    Arc::new(OnDemandRepartitionExec::try_new(input, Partitioning::OnDemand(10)).unwrap())
     // Arc::new(RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(10)).unwrap())
 }
 
@@ -336,7 +337,7 @@ pub fn spr_repartition_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionP
     //         .with_preserve_order(),
     // )
     Arc::new(
-        RepartitionExec::try_new(input, Partitioning::OnDemand(10))
+        OnDemandRepartitionExec::try_new(input, Partitioning::OnDemand(10))
             .unwrap()
             .with_preserve_order(),
     )

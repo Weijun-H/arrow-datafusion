@@ -95,7 +95,7 @@ impl ConvertOpt {
             // optionally, repartition the file
             let partitions = self.partitions;
             if partitions > 1 {
-                csv = csv.repartition(Partitioning::RoundRobinBatch(partitions))?
+                csv = csv.repartition(Partitioning::OnDemand(partitions))?
             }
 
             // create the physical plan

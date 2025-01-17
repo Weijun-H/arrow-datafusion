@@ -46,6 +46,7 @@ pub use crate::display::{DefaultDisplay, DisplayAs, DisplayFormatType, VerboseDi
 pub use crate::metrics::Metric;
 use crate::metrics::MetricsSet;
 pub use crate::ordering::InputOrderMode;
+use crate::repartition::on_demand_repartition::OnDemandRepartitionExec;
 use crate::repartition::RepartitionExec;
 use crate::sorts::sort_preserving_merge::SortPreservingMergeExec;
 pub use crate::stream::EmptyRecordBatchStream;
@@ -668,6 +669,13 @@ pub fn need_data_exchange(plan: Arc<dyn ExecutionPlan>) -> bool {
         !matches!(
             repartition.properties().output_partitioning(),
             Partitioning::RoundRobinBatch(_)
+        )
+    } else if let Some(repartition) =
+        plan.as_any().downcast_ref::<OnDemandRepartitionExec>()
+    {
+        !matches!(
+            repartition.properties().output_partitioning(),
+            Partitioning::OnDemand(_)
         )
     } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>()
     {

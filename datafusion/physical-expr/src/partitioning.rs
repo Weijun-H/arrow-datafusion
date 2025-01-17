@@ -235,6 +235,11 @@ impl PartialEq for Partitioning {
             {
                 true
             }
+            (Partitioning::OnDemand(count1), Partitioning::OnDemand(count2))
+                if count1 == count2 =>
+            {
+                true
+            }
             _ => false,
         }
     }
@@ -314,7 +319,8 @@ mod tests {
 
         let single_partition = Partitioning::UnknownPartitioning(1);
         let unspecified_partition = Partitioning::UnknownPartitioning(10);
-        let round_robin_partition = Partitioning::RoundRobinBatch(10);
+        // let round_robin_partition = Partitioning::RoundRobinBatch(10);
+        let round_robin_partition = Partitioning::OnDemand(10);
         let hash_partition1 = Partitioning::Hash(partition_exprs1, 10);
         let hash_partition2 = Partitioning::Hash(partition_exprs2, 10);
         let eq_properties = EquivalenceProperties::new(schema);

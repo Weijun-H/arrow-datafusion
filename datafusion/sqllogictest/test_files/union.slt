@@ -236,7 +236,7 @@ physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
 02)--CoalesceBatchesExec: target_batch_size=8192
 03)----RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
+04)------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=3
 05)--------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
 06)----------UnionExec
 07)------------MemoryExec: partitions=1, partition_sizes=[1]
@@ -313,12 +313,12 @@ physical_plan
 05)--------CoalesceBatchesExec: target_batch_size=2
 06)----------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 09)----------------MemoryExec: partitions=1, partition_sizes=[1]
 10)------CoalesceBatchesExec: target_batch_size=2
 11)--------RepartitionExec: partitioning=Hash([CAST(t2.id AS Int32)@2, name@1], 4), input_partitions=4
 12)----------ProjectionExec: expr=[id@0 as id, name@1 as name, CAST(id@0 AS Int32) as CAST(t2.id AS Int32)]
-13)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+13)------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 14)--------------MemoryExec: partitions=1, partition_sizes=[1]
 15)--ProjectionExec: expr=[CAST(id@0 AS Int32) as id, name@1 as name]
 16)----CoalesceBatchesExec: target_batch_size=2
@@ -330,11 +330,11 @@ physical_plan
 22)----------------CoalesceBatchesExec: target_batch_size=2
 23)------------------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
 24)--------------------AggregateExec: mode=Partial, gby=[id@0 as id, name@1 as name], aggr=[]
-25)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+25)----------------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 26)------------------------MemoryExec: partitions=1, partition_sizes=[1]
 27)--------CoalesceBatchesExec: target_batch_size=2
 28)----------RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
-29)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+29)------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 30)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 
@@ -387,11 +387,11 @@ physical_plan
 05)--------CoalesceBatchesExec: target_batch_size=2
 06)----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 09)----------------MemoryExec: partitions=1, partition_sizes=[1]
 10)------CoalesceBatchesExec: target_batch_size=2
 11)--------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-12)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)----------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 13)------------MemoryExec: partitions=1, partition_sizes=[1]
 14)--CoalesceBatchesExec: target_batch_size=2
 15)----HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(name@0, name@0)]
@@ -399,11 +399,11 @@ physical_plan
 17)--------CoalesceBatchesExec: target_batch_size=2
 18)----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
 19)------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
-20)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+20)--------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 21)----------------MemoryExec: partitions=1, partition_sizes=[1]
 22)------CoalesceBatchesExec: target_batch_size=2
 23)--------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
-24)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+24)----------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 25)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 # union_upcast_types
@@ -422,11 +422,11 @@ physical_plan
 02)--UnionExec
 03)----SortExec: TopK(fetch=5), expr=[c9@1 DESC], preserve_partitioning=[true]
 04)------ProjectionExec: expr=[c1@0 as c1, CAST(c9@1 AS Int64) as c9]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], has_header=true
 07)----SortExec: TopK(fetch=5), expr=[c9@1 DESC], preserve_partitioning=[true]
 08)------ProjectionExec: expr=[c1@0 as c1, CAST(c3@1 AS Int64) as c9]
-09)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 10)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
 
 query TI
@@ -463,13 +463,13 @@ physical_plan
 05)--------CoalesceBatchesExec: target_batch_size=2
 06)----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
 07)------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 09)----------------MemoryExec: partitions=1, partition_sizes=[1]
 10)------AggregateExec: mode=FinalPartitioned, gby=[name@0 as name], aggr=[]
 11)--------CoalesceBatchesExec: target_batch_size=2
 12)----------RepartitionExec: partitioning=Hash([name@0], 4), input_partitions=4
 13)------------AggregateExec: mode=Partial, gby=[name@0 as name], aggr=[]
-14)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+14)--------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 15)----------------MemoryExec: partitions=1, partition_sizes=[1]
 
 # Union with limit push down 3 children test case
@@ -524,7 +524,7 @@ physical_plan
 12)----------------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
 13)------------------------CoalesceBatchesExec: target_batch_size=2
 14)--------------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
-15)----------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+15)----------------------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 16)------------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
 17)------ProjectionExec: expr=[1 as cnt]
 18)--------PlaceholderRowExec

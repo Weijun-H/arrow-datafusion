@@ -1320,7 +1320,7 @@ physical_plan
 08)--------------SortExec: expr=[c1@0 ASC NULLS LAST, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
 09)----------------CoalesceBatchesExec: target_batch_size=4096
 10)------------------RepartitionExec: partitioning=Hash([c1@0, c2@1], 2), input_partitions=2
-11)--------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+11)--------------------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
 12)----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c4], has_header=true
 
 
@@ -1733,7 +1733,7 @@ physical_plan
 06)----------SortPreservingMergeExec: [__common_expr_1@0 DESC, c9@3 DESC, c2@1 ASC NULLS LAST]
 07)------------SortExec: expr=[__common_expr_1@0 DESC, c9@3 DESC, c2@1 ASC NULLS LAST], preserve_partitioning=[true]
 08)--------------ProjectionExec: expr=[c3@1 + c4@2 as __common_expr_1, c2@0 as c2, c3@1 as c3, c9@3 as c9]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+09)----------------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
 10)------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3, c4, c9], has_header=true
 
 
@@ -1784,7 +1784,7 @@ physical_plan
 09)----------------AggregateExec: mode=Partial, gby=[c1@0 as c1], aggr=[]
 10)------------------CoalesceBatchesExec: target_batch_size=4096
 11)--------------------FilterExec: c13@1 != C2GT5KVyOPZpgKVl110TyZO0NcJ434, projection=[c1@0]
-12)----------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+12)----------------------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
 13)------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c13], has_header=true
 
 
@@ -1826,7 +1826,7 @@ physical_plan
 04)------SortExec: expr=[c3@0 ASC NULLS LAST, c9@1 DESC], preserve_partitioning=[true]
 05)--------CoalesceBatchesExec: target_batch_size=4096
 06)----------RepartitionExec: partitioning=Hash([c3@0], 2), input_partitions=2
-07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+07)------------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
 08)--------------ProjectionExec: expr=[c3@1 as c3, c9@2 as c9, sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]
 09)----------------BoundedWindowAggExec: wdw=[sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "sum(aggregate_test_100.c9) ORDER BY [aggregate_test_100.c3 DESC NULLS FIRST, aggregate_test_100.c9 DESC NULLS FIRST, aggregate_test_100.c2 ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: UInt64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int16(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
 10)------------------SortExec: expr=[c3@1 DESC, c9@2 DESC, c2@0 ASC NULLS LAST], preserve_partitioning=[false]
@@ -1868,7 +1868,7 @@ physical_plan
 04)------SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[true]
 05)--------CoalesceBatchesExec: target_batch_size=4096
 06)----------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
-07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+07)------------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
 08)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
 
 query TI
@@ -1997,7 +1997,7 @@ physical_plan
 04)------SortExec: expr=[c1@0 ASC NULLS LAST], preserve_partitioning=[true]
 05)--------CoalesceBatchesExec: target_batch_size=4096
 06)----------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
-07)------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+07)------------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
 08)--------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1], has_header=true
 
 statement ok
@@ -2026,7 +2026,7 @@ physical_plan
 07)------------SortExec: expr=[c1@0 ASC NULLS LAST, c9@1 ASC NULLS LAST], preserve_partitioning=[true]
 08)--------------CoalesceBatchesExec: target_batch_size=4096
 09)----------------RepartitionExec: partitioning=Hash([c1@0], 2), input_partitions=2
-10)------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+10)------------------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
 11)--------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c9], has_header=true
 
 # test_window_agg_with_global_limit
@@ -2046,7 +2046,7 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[], aggr=[array_agg(aggregate_test_100.c13)]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[], aggr=[array_agg(aggregate_test_100.c13)]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
 06)----------SortExec: TopK(fetch=1), expr=[c13@0 ASC NULLS LAST], preserve_partitioning=[false]
 07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c13], has_header=true
 
@@ -3276,7 +3276,7 @@ physical_plan
 13)------------------------CoalesceBatchesExec: target_batch_size=4096
 14)--------------------------RepartitionExec: partitioning=Hash([a@1, b@2], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST, __common_expr_1@0 ASC NULLS LAST
 15)----------------------------ProjectionExec: expr=[CAST(a@0 AS Int64) as __common_expr_1, a@0 as a, b@1 as b, c@2 as c, d@3 as d]
-16)------------------------------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+16)------------------------------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
 17)--------------------------------StreamingTableExec: partition_sizes=1, projection=[a, b, c, d], infinite_source=true, output_ordering=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST]
 
 # reset the partition number 1 again
@@ -3625,7 +3625,7 @@ physical_plan
 03)----BoundedWindowAggExec: wdw=[avg(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW: Ok(Field { name: "avg(multiple_ordered_table_inf.d) PARTITION BY [multiple_ordered_table_inf.d] ORDER BY [multiple_ordered_table_inf.a ASC NULLS LAST] RANGE BETWEEN 10 PRECEDING AND CURRENT ROW", data_type: Float64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int32(10)), end_bound: CurrentRow, is_causal: false }], mode=[Linear]
 04)------CoalesceBatchesExec: target_batch_size=4096
 05)--------RepartitionExec: partitioning=Hash([d@4], 2), input_partitions=2, preserve_order=true, sort_exprs=a@1 ASC NULLS LAST, b@2 ASC NULLS LAST, c@3 ASC NULLS LAST
-06)----------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+06)----------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
 07)------------StreamingTableExec: partition_sizes=1, projection=[a0, a, b, c, d], infinite_source=true, output_orderings=[[a@1 ASC NULLS LAST, b@2 ASC NULLS LAST], [c@3 ASC NULLS LAST]]
 
 # CTAS with NTILE function
@@ -4120,7 +4120,7 @@ physical_plan
 02)--BoundedWindowAggExec: wdw=[count(*) PARTITION BY [a.a] ORDER BY [a.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Ok(Field { name: "count(*) PARTITION BY [a.a] ORDER BY [a.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", data_type: Int64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Range, start_bound: Preceding(Int64(NULL)), end_bound: CurrentRow, is_causal: false }], mode=[Sorted]
 03)----CoalesceBatchesExec: target_batch_size=4096
 04)------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
 06)----------CoalesceBatchesExec: target_batch_size=4096
 07)------------FilterExec: a@0 = 1
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
@@ -4143,7 +4143,7 @@ physical_plan
 02)--BoundedWindowAggExec: wdw=[row_number() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "row_number() PARTITION BY [a.a] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: UInt64, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }], mode=[Sorted]
 03)----CoalesceBatchesExec: target_batch_size=4096
 04)------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=2
-05)--------RepartitionExec: partitioning=RoundRobinBatch(2), input_partitions=1
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(2), input_partitions=1
 06)----------CoalesceBatchesExec: target_batch_size=4096
 07)------------FilterExec: a@0 = 1
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
@@ -5054,7 +5054,7 @@ select b, row_number() over (order by a) from (select TRUE as a, 1 as b);
 1 1
 
 # test window functions on boolean columns
-query T
+statement count 0
 create table t1 (id int, bool_col boolean) as values 
     (1, true),
     (2, false),

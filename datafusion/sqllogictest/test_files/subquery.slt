@@ -208,11 +208,11 @@ physical_plan
 06)----------CoalesceBatchesExec: target_batch_size=2
 07)------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 08)--------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 10)------------------MemoryExec: partitions=1, partition_sizes=[1]
 11)------CoalesceBatchesExec: target_batch_size=2
 12)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-13)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+13)----------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 14)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query II rowsort
@@ -244,11 +244,11 @@ physical_plan
 06)----------CoalesceBatchesExec: target_batch_size=2
 07)------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 08)--------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int * Float64(1))]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 10)------------------MemoryExec: partitions=1, partition_sizes=[1]
 11)------CoalesceBatchesExec: target_batch_size=2
 12)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-13)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+13)----------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 14)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query IR rowsort
@@ -280,11 +280,11 @@ physical_plan
 06)----------CoalesceBatchesExec: target_batch_size=2
 07)------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 08)--------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-09)----------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 10)------------------MemoryExec: partitions=1, partition_sizes=[1]
 11)------CoalesceBatchesExec: target_batch_size=2
 12)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-13)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+13)----------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 14)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query II rowsort
@@ -319,11 +319,11 @@ physical_plan
 08)--------------CoalesceBatchesExec: target_batch_size=2
 09)----------------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
 10)------------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
-11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)--------------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 12)----------------------MemoryExec: partitions=1, partition_sizes=[1]
 13)------CoalesceBatchesExec: target_batch_size=2
 14)--------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-15)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+15)----------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 16)------------MemoryExec: partitions=1, partition_sizes=[1]
 
 query II rowsort
@@ -1152,11 +1152,11 @@ physical_plan
 04)------HashJoinExec: mode=Partitioned, join_type=LeftMark, on=[(t1_id@0, t2_id@0)]
 05)--------CoalesceBatchesExec: target_batch_size=2
 06)----------RepartitionExec: partitioning=Hash([t1_id@0], 4), input_partitions=4
-07)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+07)------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
 09)--------CoalesceBatchesExec: target_batch_size=2
 10)----------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
-11)------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 12)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
 statement ok

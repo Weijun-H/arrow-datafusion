@@ -851,6 +851,7 @@ impl<T: BatchTransformer + Unpin + Send> RecordBatchStream for NestedLoopJoinStr
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::repartition::on_demand_repartition::OnDemandRepartitionExec;
     use crate::{
         common, expressions::Column, memory::MemoryExec, repartition::RepartitionExec,
         test::build_table_i32,
@@ -986,9 +987,14 @@ pub(crate) mod tests {
         let partition_count = 4;
 
         // Redistributing right input
-        let right = Arc::new(RepartitionExec::try_new(
+        // TODO: replaced with OnDemandRepartitionExec
+        // let right = Arc::new(RepartitionExec::try_new(
+        //     right,
+        //     Partitioning::RoundRobinBatch(partition_count),
+        // )?) as Arc<dyn ExecutionPlan>;
+        let right = Arc::new(OnDemandRepartitionExec::try_new(
             right,
-            Partitioning::RoundRobinBatch(partition_count),
+            Partitioning::OnDemand(partition_count),
         )?) as Arc<dyn ExecutionPlan>;
 
         // Use the required distribution for nested loop join to test partition data

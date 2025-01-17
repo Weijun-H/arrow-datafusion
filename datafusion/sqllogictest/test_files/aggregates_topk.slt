@@ -49,7 +49,7 @@ physical_plan
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
 04)------CoalesceBatchesExec: target_batch_size=8192
 05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 07)------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -113,7 +113,7 @@ physical_plan
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], lim=[4]
 04)------CoalesceBatchesExec: target_batch_size=8192
 05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 07)------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], lim=[4]
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -130,7 +130,7 @@ physical_plan
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[min(traces.timestamp)]
 04)------CoalesceBatchesExec: target_batch_size=8192
 05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 07)------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[min(traces.timestamp)]
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -147,7 +147,7 @@ physical_plan
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
 04)------CoalesceBatchesExec: target_batch_size=8192
 05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 07)------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -164,7 +164,7 @@ physical_plan
 03)----AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
 04)------CoalesceBatchesExec: target_batch_size=8192
 05)--------RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=4
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 07)------------AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)]
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
 

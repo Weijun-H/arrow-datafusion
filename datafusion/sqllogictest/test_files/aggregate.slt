@@ -147,7 +147,7 @@ physical_plan
 02)--CoalescePartitionsExec
 03)----AggregateExec: mode=Partial, gby=[], aggr=[array_agg(agg_order.c1) ORDER BY [agg_order.c2 DESC NULLS FIRST, agg_order.c3 ASC NULLS LAST]]
 04)------SortExec: expr=[c2@1 DESC, c3@2 ASC NULLS LAST], preserve_partitioning=[true]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/aggregate_agg_multi_order.csv]]}, projection=[c1, c2, c3], has_header=true
 
 # test array_agg_order with list data type
@@ -1000,7 +1000,7 @@ physical_plan
 05)--------AggregateExec: mode=FinalPartitioned, gby=[alias1@0 as alias1], aggr=[]
 06)----------CoalesceBatchesExec: target_batch_size=8192
 07)------------RepartitionExec: partitioning=Hash([alias1@0], 4), input_partitions=4
-08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+08)--------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 09)----------------AggregateExec: mode=Partial, gby=[c@0 as alias1], aggr=[]
 10)------------------MemoryExec: partitions=1, partition_sizes=[1]
 
@@ -4935,7 +4935,7 @@ physical_plan
 08)--------------CoalesceBatchesExec: target_batch_size=8192
 09)----------------RepartitionExec: partitioning=Hash([c3@0], 4), input_partitions=4
 10)------------------AggregateExec: mode=Partial, gby=[c3@1 as c3], aggr=[min(aggregate_test_100.c1)]
-11)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+11)--------------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 12)----------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c3], has_header=true
 
 
@@ -4960,7 +4960,7 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[5]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[5]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
 
 query I
@@ -4984,7 +4984,7 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[], lim=[9]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
 query II
@@ -5012,14 +5012,14 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[], lim=[4]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[], lim=[4]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 06)----------ProjectionExec: expr=[c3@1 as c3]
 07)------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
 08)--------------CoalescePartitionsExec
 09)----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
 10)------------------CoalesceBatchesExec: target_batch_size=8192
 11)--------------------FilterExec: c3@1 >= 10 AND c3@1 <= 20
-12)----------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+12)----------------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 13)------------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
 query I
@@ -5045,7 +5045,7 @@ physical_plan
 03)----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[max(aggregate_test_100.c1)]
 04)------CoalescePartitionsExec
 05)--------AggregateExec: mode=Partial, gby=[c2@1 as c2, c3@2 as c3], aggr=[max(aggregate_test_100.c1)]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c1, c2, c3], has_header=true
 
 # TODO(msirek): Extend checking in LimitedDistinctAggregation equal groupings to ignore the order of columns
@@ -5064,12 +5064,12 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[c3@0 as c3, c2@1 as c2], aggr=[], lim=[13]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[c3@0 as c3, c2@1 as c2], aggr=[], lim=[13]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 06)----------ProjectionExec: expr=[c3@1 as c3, c2@0 as c2]
 07)------------AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
 08)--------------CoalescePartitionsExec
 09)----------------AggregateExec: mode=Partial, gby=[c2@0 as c2, c3@1 as c3], aggr=[]
-10)------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+10)------------------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 11)--------------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
 query II
@@ -5093,7 +5093,7 @@ physical_plan
 03)----AggregateExec: mode=Final, gby=[c2@0 as c2, c3@1 as c3, __grouping_id@2 as __grouping_id], aggr=[], lim=[3]
 04)------CoalescePartitionsExec
 05)--------AggregateExec: mode=Partial, gby=[(NULL as c2, NULL as c3), (c2@0 as c2, NULL as c3), (c2@0 as c2, c3@1 as c3)], aggr=[]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 07)------------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c2, c3], has_header=true
 
 query II
@@ -5120,7 +5120,7 @@ physical_plan
 02)--AggregateExec: mode=Final, gby=[c3@0 as c3], aggr=[]
 03)----CoalescePartitionsExec
 04)------AggregateExec: mode=Partial, gby=[c3@0 as c3], aggr=[]
-05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 06)----------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100.csv]]}, projection=[c3], has_header=true
 
 statement ok
@@ -5905,7 +5905,7 @@ physical_plan
 01)AggregateExec: mode=Final, gby=[], aggr=[first_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c3 DESC NULLS FIRST]]
 02)--CoalescePartitionsExec
 03)----AggregateExec: mode=Partial, gby=[], aggr=[last_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c3 ASC NULLS LAST]]
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c3], output_orderings=[[c1@0 ASC NULLS LAST], [c3@1 ASC NULLS LAST]], has_header=true
 
 # test last to first
@@ -5919,7 +5919,7 @@ physical_plan
 01)AggregateExec: mode=Final, gby=[], aggr=[last_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c2 ASC NULLS LAST]]
 02)--CoalescePartitionsExec
 03)----AggregateExec: mode=Partial, gby=[], aggr=[first_value(convert_first_last_table.c1) ORDER BY [convert_first_last_table.c2 DESC NULLS FIRST]]
-04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+04)------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 05)--------CsvExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/convert_first_last.csv]]}, projection=[c1, c2], output_orderings=[[c1@0 ASC NULLS LAST], [c2@1 DESC]], has_header=true
 
 # test building plan with aggreagte sum
@@ -5991,7 +5991,7 @@ physical_plan
 03)----AggregateExec: mode=FinalPartitioned, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
 04)------CoalesceBatchesExec: target_batch_size=8192
 05)--------RepartitionExec: partitioning=Hash([v1@0, v2@1], 4), input_partitions=4
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------OnDemandRepartitionExec: partitioning=OnDemand(4), input_partitions=1
 07)------------AggregateExec: mode=Partial, gby=[v1@0 as v1, v2@1 as v2], aggr=[max(having_test.v1)]
 08)--------------MemoryExec: partitions=1, partition_sizes=[1]
 

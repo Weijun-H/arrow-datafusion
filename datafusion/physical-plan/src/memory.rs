@@ -395,9 +395,14 @@ impl LazyMemoryExec {
         schema: SchemaRef,
         generators: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
     ) -> Result<Self> {
+        // let cache = PlanProperties::new(
+        //     EquivalenceProperties::new(Arc::clone(&schema)),
+        //     Partitioning::RoundRobinBatch(generators.len()),
+        //     ExecutionMode::Bounded,
+        // );
         let cache = PlanProperties::new(
             EquivalenceProperties::new(Arc::clone(&schema)),
-            Partitioning::RoundRobinBatch(generators.len()),
+            Partitioning::OnDemand(generators.len()),
             ExecutionMode::Bounded,
         );
         Ok(Self {

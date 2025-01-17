@@ -121,8 +121,6 @@ impl RunOpt {
             .config()
             .with_collect_statistics(!self.disable_statistics);
         config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
-        config.options_mut().optimizer.enable_on_demand_repartition = true;
-        config.options_mut().optimizer.enable_round_robin_repartition = false;
         let ctx = SessionContext::new_with_config(config);
 
         // register tables
