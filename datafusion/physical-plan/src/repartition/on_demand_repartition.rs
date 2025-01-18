@@ -51,7 +51,7 @@ use datafusion_execution::TaskContext;
 
 use datafusion_common::HashMap;
 use futures::stream::Stream;
-use futures::{ready, FutureExt, StreamExt, TryStreamExt};
+use futures::{channel, ready, FutureExt, StreamExt, TryStreamExt};
 use log::{debug, trace};
 use parking_lot::Mutex;
 
@@ -59,8 +59,8 @@ use parking_lot::Mutex;
 pub struct OnDemandRepartitionExec {
     base: RepartitionExecBase,
     /// Channel to send partition number to the downstream task
-    partition_channel:
-        Arc<tokio::sync::OnceCell<Mutex<(Sender<usize>, Receiver<usize>)>>>,
+    partition_channels:
+        Arc<tokio::sync::OnceCell<Mutex<(Vec<Sender<usize>>, Vec<Receiver<usize>>)>>>,
 }
 
 impl OnDemandRepartitionExec {
@@ -182,7 +182,7 @@ impl ExecutionPlan for OnDemandRepartitionExec {
         );
 
         let lazy_state = Arc::clone(&self.base.state);
-        let partition_channel = Arc::clone(&self.partition_channel);
+        let partition_channels = Arc::clone(&self.partition_channels);
         let input = Arc::clone(&self.base.input);
         let partitioning = self.partitioning().clone();
         let metrics = self.base.metrics.clone();
@@ -196,16 +196,36 @@ impl ExecutionPlan for OnDemandRepartitionExec {
 
         let stream = futures::stream::once(async move {
             let num_input_partitions = input.output_partitioning().partition_count();
+            let num_output_partitions = partitioning.partition_count();
 
             let input_captured = Arc::clone(&input);
             let metrics_captured = metrics.clone();
             let name_captured = name.clone();
             let context_captured = Arc::clone(&context);
-            let partition_channel = partition_channel
-                .get_or_init(|| async move { Mutex::new(async_channel::unbounded()) })
+            let partition_channels = partition_channels
+                .get_or_init(|| async move {
+                    if preserve_order {
+                        let (txs, rxs) = (0..num_input_partitions)
+                            .map(|_| async_channel::unbounded())
+                            .unzip::<_, _, Vec<_>, Vec<_>>();
+                        // TODO: this approach is not ideal, as it pre-fetches too many partitions
+                        for i in 0..num_output_partitions {
+                            txs.iter().for_each(|tx| {
+                                tx.send_blocking(i).expect("send partition number");
+                            });
+                        }
+                        Mutex::new((txs, rxs))
+                    } else {
+                        let (tx, rx) = async_channel::unbounded();
+                        for i in num_input_partitions..num_output_partitions {
+                            tx.send(i).await.expect("send partition number");
+                        }
+                        Mutex::new((vec![tx], vec![rx]))
+                    }
+                })
                 .await;
-            let (partition_tx, partition_rx) = {
-                let channel = partition_channel.lock();
+            let (partition_txs, partition_rxs) = {
+                let channel = partition_channels.lock();
                 (channel.0.clone(), channel.1.clone())
             };
 
@@ -214,7 +234,7 @@ impl ExecutionPlan for OnDemandRepartitionExec {
                     Mutex::new(
                         RepartitionExecStateBuilder::new()
                             .enable_pull_based(true)
-                            .partition_receiver(partition_rx.clone())
+                            .partition_receivers(partition_rxs.clone())
                             .build(
                                 input_captured,
                                 partitioning.clone(),
@@ -249,16 +269,22 @@ impl ExecutionPlan for OnDemandRepartitionExec {
             );
 
             if preserve_order {
+                // TODO: remove this later
+                debug!("patition number: {}", partition);
+                debug!("rx number: {}", rx.len());
+
                 // Store streams from all the input partitions:
                 let input_streams = rx
                     .into_iter()
-                    .map(|receiver| {
+                    .enumerate()
+                    .map(|(i, receiver)| {
+                        // sender should be partition-wise
                         Box::pin(OnDemandPerPartitionStream {
                             schema: Arc::clone(&schema_captured),
                             receiver,
                             _drop_helper: Arc::clone(&abort_helper),
                             reservation: Arc::clone(&reservation),
-                            sender: partition_tx.clone(),
+                            sender: partition_txs[i].clone(),
                             partition,
                             is_requested: false,
                         }) as SendableRecordBatchStream
@@ -289,7 +315,7 @@ impl ExecutionPlan for OnDemandRepartitionExec {
                     input: rx.swap_remove(0),
                     _drop_helper: abort_helper,
                     reservation,
-                    sender: partition_tx.clone(),
+                    sender: partition_txs[0].clone(),
                     partition,
                     is_requested: false,
                 }) as SendableRecordBatchStream)
@@ -335,7 +361,7 @@ impl OnDemandRepartitionExec {
                 preserve_order,
                 cache,
             },
-            partition_channel: Default::default(),
+            partition_channels: Default::default(),
         })
     }
 
@@ -366,15 +392,13 @@ impl OnDemandRepartitionExec {
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
         while !output_channels.is_empty() {
+            // Get the partition number from the output partition
             let partition = output_partition_rx.recv().await.map_err(|e| {
                 internal_datafusion_err!(
                     "Error receiving partition number from output partition: {}",
                     e
                 )
             })?;
-
-            // fetch the next batch
-            let timer = metrics.fetch_time.timer();
             // TODO: To be removed
             debug!(
                 "On demand pull from input Part: {} \n Are Output channels empty? {}",
@@ -382,6 +406,8 @@ impl OnDemandRepartitionExec {
                 output_channels.is_empty()
             );
 
+            // fetch the next batch
+            let timer = metrics.fetch_time.timer();
             let result = stream.next().await;
             timer.done();
 
@@ -435,51 +461,6 @@ impl OnDemandRepartitionExec {
 
         Ok(())
     }
-
-    /// Waits for `input_task` which is consuming one of the inputs to
-    /// complete. Upon each successful completion, sends a `None` to
-    /// each of the output tx channels to signal one of the inputs is
-    /// complete. Upon error, propagates the errors to all output tx
-    /// channels.
-    pub(crate) async fn wait_for_task(
-        input_task: SpawnedTask<Result<()>>,
-        txs: HashMap<usize, DistributionSender<MaybeBatch>>,
-    ) {
-        // wait for completion, and propagate error
-        // note we ignore errors on send (.ok) as that means the receiver has already shutdown.
-
-        match input_task.join().await {
-            // Error in joining task
-            Err(e) => {
-                let e = Arc::new(e);
-
-                for (_, tx) in txs {
-                    let err = Err(DataFusionError::Context(
-                        "Join Error".to_string(),
-                        Box::new(DataFusionError::External(Box::new(Arc::clone(&e)))),
-                    ));
-                    tx.send(Some(err)).await.ok();
-                }
-            }
-            // Error from running input task
-            Ok(Err(e)) => {
-                let e = Arc::new(e);
-
-                for (_, tx) in txs {
-                    // wrap it because need to send error to all output partitions
-                    let err = Err(DataFusionError::External(Box::new(Arc::clone(&e))));
-                    tx.send(Some(err)).await.ok();
-                }
-            }
-            // Input task completed successfully
-            Ok(Ok(())) => {
-                // notify each output partition that this input partition has no more data
-                for (_, tx) in txs {
-                    tx.send(None).await.ok();
-                }
-            }
-        }
-    }
 }
 
 /// This struct converts a receiver to a stream.
@@ -530,7 +511,7 @@ impl Stream for OnDemandPerPartitionStream {
                 "On Demand Repartition per partition poll {}, send partition number",
                 self.partition
             );
-            // self.is_requested = true;
+            self.is_requested = true;
         }
 
         match ready!(self.receiver.recv().poll_unpin(cx)) {

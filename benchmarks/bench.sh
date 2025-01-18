@@ -156,6 +156,9 @@ main() {
                 tpch10)
                     data_tpch "10"
                     ;;
+                tpch50)
+                    data_tpch "50"
+                    ;;
                 tpch_mem10)
                     # same data as for tpch10
                     data_tpch "10"
@@ -232,6 +235,9 @@ main() {
                     ;;
                 tpch10)
                     run_tpch "10"
+                    ;;
+                tpch50)
+                    run_tpch "50"
                     ;;
                 tpch_mem10)
                     run_tpch_mem "10"

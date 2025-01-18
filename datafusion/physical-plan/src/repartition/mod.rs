@@ -69,22 +69,22 @@ type InputPartitionsToCurrentPartitionReceiver = Vec<DistributionReceiver<MaybeB
 struct RepartitionExecStateBuilder {
     /// Whether to enable pull based execution.
     enable_pull_based: bool,
-    partition_receiver: Option<Receiver<usize>>,
+    partition_receivers: Option<Vec<Receiver<usize>>>,
 }
 
 impl RepartitionExecStateBuilder {
     fn new() -> Self {
         Self {
             enable_pull_based: false,
-            partition_receiver: None,
+            partition_receivers: None,
         }
     }
     fn enable_pull_based(mut self, enable_pull_based: bool) -> Self {
         self.enable_pull_based = enable_pull_based;
         self
     }
-    fn partition_receiver(mut self, partition_receiver: Receiver<usize>) -> Self {
-        self.partition_receiver = Some(partition_receiver);
+    fn partition_receivers(mut self, partition_receivers: Vec<Receiver<usize>>) -> Self {
+        self.partition_receivers = Some(partition_receivers);
         self
     }
 
@@ -105,7 +105,7 @@ impl RepartitionExecStateBuilder {
             name,
             context,
             self.enable_pull_based,
-            self.partition_receiver.clone(),
+            self.partition_receivers.clone(),
         )
     }
 }
@@ -194,7 +194,7 @@ impl RepartitionExecState {
         name: String,
         context: Arc<TaskContext>,
         enable_pull_based: bool,
-        partition_receiver: Option<Receiver<usize>>,
+        partition_receivers: Option<Vec<Receiver<usize>>>,
     ) -> Self {
         let num_input_partitions = input.output_partitioning().partition_count();
         let num_output_partitions = partitioning.partition_count();
@@ -221,12 +221,22 @@ impl RepartitionExecState {
             let r_metrics = RepartitionMetrics::new(i, num_output_partitions, &metrics);
 
             let input_task = if enable_pull_based {
+                let partition_rx = if preserve_order {
+                    partition_receivers.clone().expect(
+                        "partition_receivers must be provided when preserve_order is enabled",
+                    )[i]
+                        .clone()
+                } else {
+                    partition_receivers.clone().expect(
+                        "partition_receivers must be provided when preserve_order is disabled",
+                    )[0].clone()
+                };
                 SpawnedTask::spawn(OnDemandRepartitionExec::pull_from_input(
                     Arc::clone(&input),
                     i,
                     txs.clone(),
                     partitioning.clone(),
-                    partition_receiver.clone().unwrap(),
+                    partition_rx,
                     r_metrics,
                     Arc::clone(&context),
                 ))
@@ -244,21 +254,13 @@ impl RepartitionExecState {
             // In a separate task, wait for each input to be done
             // (and pass along any errors, including panic!s)
 
-            let wait_for_task = if enable_pull_based {
-                SpawnedTask::spawn(OnDemandRepartitionExec::wait_for_task(
-                    input_task,
-                    txs.into_iter()
-                        .map(|(partition, (tx, _reservation))| (partition, tx))
-                        .collect(),
-                ))
-            } else {
-                SpawnedTask::spawn(RepartitionExec::wait_for_task(
-                    input_task,
-                    txs.into_iter()
-                        .map(|(partition, (tx, _reservation))| (partition, tx))
-                        .collect(),
-                ))
-            };
+            let wait_for_task = SpawnedTask::spawn(RepartitionExec::wait_for_task(
+                input_task,
+                txs.into_iter()
+                    .map(|(partition, (tx, _reservation))| (partition, tx))
+                    .collect(),
+            ));
+
             spawned_tasks.push(wait_for_task);
         }
 
