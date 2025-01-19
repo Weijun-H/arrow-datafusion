@@ -204,24 +204,21 @@ impl ExecutionPlan for OnDemandRepartitionExec {
             let context_captured = Arc::clone(&context);
             let partition_channels = partition_channels
                 .get_or_init(|| async move {
-                    if preserve_order {
-                        let (txs, rxs) = (0..num_input_partitions)
+                    let (txs, rxs) = if preserve_order {
+                        (0..num_input_partitions)
                             .map(|_| async_channel::unbounded())
-                            .unzip::<_, _, Vec<_>, Vec<_>>();
-                        // TODO: this approach is not ideal, as it pre-fetches too many partitions
-                        for i in 0..num_output_partitions {
-                            txs.iter().for_each(|tx| {
-                                tx.send_blocking(i).expect("send partition number");
-                            });
-                        }
-                        Mutex::new((txs, rxs))
+                            .unzip::<_, _, Vec<_>, Vec<_>>()
                     } else {
                         let (tx, rx) = async_channel::unbounded();
-                        for i in num_input_partitions..num_output_partitions {
-                            tx.send(i).await.expect("send partition number");
-                        }
-                        Mutex::new((vec![tx], vec![rx]))
+                        (vec![tx], vec![rx])
+                    };
+                    // Send partition number to each input partition in order to prefetch 1 RecordBatch per partition
+                    for i in 0..num_output_partitions {
+                        txs.iter().for_each(|tx| {
+                            tx.send_blocking(i).expect("send partition number");
+                        });
                     }
+                    Mutex::new((txs, rxs))
                 })
                 .await;
             let (partition_txs, partition_rxs) = {
@@ -392,6 +389,17 @@ impl OnDemandRepartitionExec {
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
         while !output_channels.is_empty() {
+            // fetch the next batch
+            let timer = metrics.fetch_time.timer();
+            let result = stream.next().await;
+            timer.done();
+
+            // Input is done
+            let batch = match result {
+                Some(result) => result?,
+                None => break,
+            };
+
             // Get the partition number from the output partition
             let partition = output_partition_rx.recv().await.map_err(|e| {
                 internal_datafusion_err!(
@@ -405,17 +413,6 @@ impl OnDemandRepartitionExec {
                 partition,
                 output_channels.is_empty()
             );
-
-            // fetch the next batch
-            let timer = metrics.fetch_time.timer();
-            let result = stream.next().await;
-            timer.done();
-
-            // Input is done
-            let batch = match result {
-                Some(result) => result?,
-                None => break,
-            };
 
             for res in partitioner.partition_iter(batch)? {
                 let (_, batch) = res?;
