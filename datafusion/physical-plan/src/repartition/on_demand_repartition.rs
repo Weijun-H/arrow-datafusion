@@ -26,7 +26,7 @@ use std::{any::Any, vec};
 
 use super::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use super::{
-    BatchPartitioner, DisplayAs, ExecutionPlanProperties, MaybeBatch, RecordBatchStream,
+    DisplayAs, ExecutionPlanProperties, MaybeBatch, RecordBatchStream,
     RepartitionExecBase, RepartitionMetrics, SendableRecordBatchStream,
 };
 use crate::common::SharedMemoryReservation;
@@ -44,14 +44,14 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_channel::{Receiver, Sender};
 
-use datafusion_common::{internal_datafusion_err, DataFusionError, Result};
+use datafusion_common::{internal_datafusion_err, Result};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::TaskContext;
 
 use datafusion_common::HashMap;
 use futures::stream::Stream;
-use futures::{channel, ready, FutureExt, StreamExt, TryStreamExt};
+use futures::{ready, FutureExt, StreamExt, TryStreamExt};
 use log::{debug, trace};
 use parking_lot::Mutex;
 
@@ -196,7 +196,6 @@ impl ExecutionPlan for OnDemandRepartitionExec {
 
         let stream = futures::stream::once(async move {
             let num_input_partitions = input.output_partitioning().partition_count();
-            let num_output_partitions = partitioning.partition_count();
 
             let input_captured = Arc::clone(&input);
             let metrics_captured = metrics.clone();
@@ -212,12 +211,6 @@ impl ExecutionPlan for OnDemandRepartitionExec {
                         let (tx, rx) = async_channel::unbounded();
                         (vec![tx], vec![rx])
                     };
-                    // Send partition number to each input partition in order to prefetch 1 RecordBatch per partition
-                    for i in 0..num_output_partitions {
-                        txs.iter().for_each(|tx| {
-                            tx.send_blocking(i).expect("send partition number");
-                        });
-                    }
                     Mutex::new((txs, rxs))
                 })
                 .await;
@@ -378,25 +371,29 @@ impl OnDemandRepartitionExec {
         metrics: RepartitionMetrics,
         context: Arc<TaskContext>,
     ) -> Result<()> {
-        let mut partitioner =
-            BatchPartitioner::try_new(partitioning, metrics.repartition_time.clone())?;
-
         // execute the child operator
-        let timer = metrics.fetch_time.timer();
-        let mut stream = input.execute(partition, context)?;
-        timer.done();
+        // let timer = metrics.fetch_time.timer();
+        // let mut stream = input.execute(partition, context)?;
+        // timer.done();
+
+        let (buffer_tx, mut buffer_rx) = tokio::sync::mpsc::channel::<RecordBatch>(2);
+        let processing_task = tokio::task::spawn(async move {
+            let mut stream = input.execute(partition, context).unwrap();
+            while let Some(batch) = stream.next().await {
+                buffer_tx.send(batch.unwrap()).await.unwrap();
+            }
+            debug!(
+                "On demand input partition {} processing finished",
+                partition
+            );
+        });
 
         // While there are still outputs to send to, keep pulling inputs
-        let mut batches_until_yield = partitioner.num_partitions();
+        let mut batches_until_yield = partitioning.partition_count();
         while !output_channels.is_empty() {
-            // fetch the next batch
-            let timer = metrics.fetch_time.timer();
-            let result = stream.next().await;
-            timer.done();
-
             // Input is done
-            let batch = match result {
-                Some(result) => result?,
+            let batch = match buffer_rx.recv().await {
+                Some(result) => result,
                 None => break,
             };
 
@@ -414,23 +411,20 @@ impl OnDemandRepartitionExec {
                 output_channels.is_empty()
             );
 
-            for res in partitioner.partition_iter(batch)? {
-                let (_, batch) = res?;
-                let size = batch.get_array_memory_size();
+            let size = batch.get_array_memory_size();
 
-                let timer = metrics.send_time[partition].timer();
-                // if there is still a receiver, send to it
-                if let Some((tx, reservation)) = output_channels.get_mut(&partition) {
-                    reservation.lock().try_grow(size)?;
+            let timer = metrics.send_time[partition].timer();
+            // if there is still a receiver, send to it
+            if let Some((tx, reservation)) = output_channels.get_mut(&partition) {
+                reservation.lock().try_grow(size)?;
 
-                    if tx.send(Some(Ok(batch))).await.is_err() {
-                        // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
-                        reservation.lock().shrink(size);
-                        output_channels.remove(&partition);
-                    }
+                if tx.send(Some(Ok(batch))).await.is_err() {
+                    // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
+                    reservation.lock().shrink(size);
+                    output_channels.remove(&partition);
                 }
-                timer.done();
             }
+            timer.done();
 
             // If the input stream is endless, we may spin forever and
             // never yield back to tokio.  See
@@ -450,12 +444,15 @@ impl OnDemandRepartitionExec {
             // in that case anyways
             if batches_until_yield == 0 {
                 tokio::task::yield_now().await;
-                batches_until_yield = partitioner.num_partitions();
+                batches_until_yield = partitioning.partition_count();
             } else {
                 batches_until_yield -= 1;
             }
         }
 
+        processing_task.await.map_err(|e| {
+            internal_datafusion_err!("Error waiting for processing task to finish: {}", e)
+        })?;
         Ok(())
     }
 }
@@ -682,8 +679,8 @@ mod tests {
 
     use arrow::array::{ArrayRef, StringArray, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::cast::as_string_array;
     use datafusion_common::{arrow_datafusion_err, assert_batches_sorted_eq, exec_err};
+    use datafusion_common::{cast::as_string_array, DataFusionError};
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use tokio::task::JoinSet;
 
