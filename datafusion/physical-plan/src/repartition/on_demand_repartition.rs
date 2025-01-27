@@ -26,7 +26,7 @@ use std::{any::Any, vec};
 
 use super::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use super::{
-    DisplayAs, ExecutionPlanProperties, MaybeBatch, RecordBatchStream,
+    BatchPartitioner, DisplayAs, ExecutionPlanProperties, MaybeBatch, RecordBatchStream,
     RepartitionExecBase, RepartitionMetrics, SendableRecordBatchStream,
 };
 use crate::common::SharedMemoryReservation;
@@ -355,6 +355,36 @@ impl OnDemandRepartitionExec {
         })
     }
 
+    async fn process_input(
+        input: Arc<dyn ExecutionPlan>,
+        partition: usize,
+        buffer_tx: tokio::sync::mpsc::Sender<RecordBatch>,
+        context: Arc<TaskContext>,
+    ) -> Result<()> {
+        let mut stream = input.execute(partition, context).map_err(|e| {
+            internal_datafusion_err!(
+                "Error executing input partition {} for on demand repartitioning: {}",
+                partition,
+                e
+            )
+        })?;
+        while let Some(batch) = stream.next().await {
+            buffer_tx.send(batch?).await.map_err(|e| {
+                internal_datafusion_err!(
+                    "Error sending batch to buffer channel for partition {}: {}",
+                    partition,
+                    e
+                )
+            })?;
+        }
+        debug!(
+            "On demand input partition {} processing finished",
+            partition
+        );
+
+        Ok(())
+    }
+
     /// Pulls data from the specified input plan, feeding it to the
     /// output partitions based on the desired partitioning
     ///
@@ -371,22 +401,19 @@ impl OnDemandRepartitionExec {
         metrics: RepartitionMetrics,
         context: Arc<TaskContext>,
     ) -> Result<()> {
-        // execute the child operator
-        // let timer = metrics.fetch_time.timer();
-        // let mut stream = input.execute(partition, context)?;
-        // timer.done();
+        let _ = BatchPartitioner::try_new(
+            partitioning.clone(),
+            metrics.repartition_time.clone(),
+        )?;
 
+        // execute the child operator in a separate task
         let (buffer_tx, mut buffer_rx) = tokio::sync::mpsc::channel::<RecordBatch>(2);
-        let processing_task = tokio::task::spawn(async move {
-            let mut stream = input.execute(partition, context).unwrap();
-            while let Some(batch) = stream.next().await {
-                buffer_tx.send(batch.unwrap()).await.unwrap();
-            }
-            debug!(
-                "On demand input partition {} processing finished",
-                partition
-            );
-        });
+        let processing_task = tokio::task::spawn(Self::process_input(
+            Arc::clone(&input),
+            partition,
+            buffer_tx,
+            Arc::clone(&context),
+        ));
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioning.partition_count();
@@ -452,7 +479,7 @@ impl OnDemandRepartitionExec {
 
         processing_task.await.map_err(|e| {
             internal_datafusion_err!("Error waiting for processing task to finish: {}", e)
-        })?;
+        })??;
         Ok(())
     }
 }

@@ -768,18 +768,6 @@ impl ExecutionPlan for RepartitionExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // TODO: make sure that this is only called for hash partitioning
-        // match self.partitioning() {
-        //     Partitioning::Hash(_, _) => {}
-        //     _ => {
-        //         panic!(
-        //             "RepartitionExec::execute should never be called directly. \
-        //         Partition type: {:?}",
-        //             self.partitioning()
-        //         );
-        //     }
-        // }
-
         trace!(
             "Start {}::execute for partition: {}",
             self.name(),
