@@ -82,7 +82,6 @@ pub struct SortPreservingMergeExec {
     cache: PlanProperties,
     /// Configuration parameter to enable round-robin selection of tied winners of loser tree.
     enable_round_robin_repartition: bool,
-    enable_pull_based_execution: bool,
 }
 
 impl SortPreservingMergeExec {
@@ -96,7 +95,6 @@ impl SortPreservingMergeExec {
             fetch: None,
             cache,
             enable_round_robin_repartition: true,
-            enable_pull_based_execution: true,
         }
     }
 
@@ -192,7 +190,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
             fetch: limit,
             cache: self.cache.clone(),
             enable_round_robin_repartition: true,
-            enable_pull_based_execution: true,
         }))
     }
 
@@ -274,34 +271,18 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 }
             },
             _ => {
-                let streams = if self.enable_pull_based_execution {
-                    // Direct stream connection without channels
-                    let streams = (0..input_partitions)
-                        .map(|partition| {
-                            self.input.execute(partition, Arc::clone(&context))
-                        })
-                        .collect::<Result<_>>()?;
+                let receivers = (0..input_partitions)
+                    .map(|partition| {
+                        let stream =
+                            self.input.execute(partition, Arc::clone(&context))?;
+                        Ok(spawn_buffered(stream, 1))
+                    })
+                    .collect::<Result<_>>()?;
 
-                    debug!(
-                        "Setting up direct streams for SortPreservingMergeExec::execute"
-                    );
-                    streams
-                } else {
-                    // Channel based stream connection
-                    let receivers = (0..input_partitions)
-                        .map(|partition| {
-                            let stream =
-                                self.input.execute(partition, Arc::clone(&context))?;
-                            Ok(spawn_buffered(stream, 1))
-                        })
-                        .collect::<Result<_>>()?;
-
-                    debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
-                    receivers
-                };
+                debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
 
                 let result = StreamingMergeBuilder::new()
-                    .with_streams(streams)
+                    .with_streams(receivers)
                     .with_schema(schema)
                     .with_expressions(self.expr.as_ref())
                     .with_metrics(BaselineMetrics::new(&self.metrics, partition))
