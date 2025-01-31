@@ -205,10 +205,10 @@ impl ExecutionPlan for OnDemandRepartitionExec {
                 .get_or_init(|| async move {
                     let (txs, rxs) = if preserve_order {
                         (0..num_input_partitions)
-                            .map(|_| async_channel::unbounded())
+                            .map(|_| async_channel::bounded(2))
                             .unzip::<_, _, Vec<_>, Vec<_>>()
                     } else {
-                        let (tx, rx) = async_channel::unbounded();
+                        let (tx, rx) = async_channel::bounded(2);
                         (vec![tx], vec![rx])
                     };
                     Mutex::new((txs, rxs))
@@ -521,13 +521,17 @@ impl Stream for OnDemandPerPartitionStream {
             "On Demand Repartition per partition poll {}, start, is_requested {}",
             self.partition, self.is_requested,
         );
-        if !self.sender.is_closed() && !self.is_requested {
-            self.sender.send_blocking(self.partition).map_err(|e| {
-                internal_datafusion_err!(
-                    "Error sending partition number to input partitions: {}",
-                    e
-                )
-            })?;
+        if !self.is_requested {
+            match self.sender.try_send(self.partition) {
+                Ok(_) => {}
+                Err(e) => {
+                    debug!(
+                        "On Demand Repartition poll {}, error sending partition number: {}",
+                        self.partition, e
+                    );
+                    return Poll::Ready(None);
+                }
+            }
             debug!(
                 "On Demand Repartition per partition poll {}, send partition number",
                 self.partition
@@ -621,13 +625,17 @@ impl Stream for OnDemandRepartitionStream {
         );
         loop {
             // Send partition number to input partitions
-            if !self.sender.is_closed() && !self.is_requested {
-                self.sender.send_blocking(self.partition).map_err(|e| {
-                    internal_datafusion_err!(
-                        "Error sending partition number to input partitions: {}",
-                        e
-                    )
-                })?;
+            if !self.is_requested {
+                match self.sender.try_send(self.partition) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        debug!(
+                            "On Demand Repartition poll {}, error sending partition number: {}",
+                            self.partition, e
+                        );
+                        return Poll::Ready(None);
+                    }
+                }
                 debug!(
                     "On Demand Repartition poll {}, send partition number",
                     self.partition
