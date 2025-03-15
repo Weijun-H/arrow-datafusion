@@ -25,6 +25,7 @@ notifications:
   issues: github@datafusion.apache.org
   pullrequests: github@datafusion.apache.org
   jira_options: link label worklog
+  discussions: github@datafusion.apache.org
 github:
   description: "Apache DataFusion SQL Query Engine"
   homepage: https://datafusion.apache.org/
@@ -44,6 +45,7 @@ github:
     rebase: false
   features:
     issues: true
+    discussions: true
   protected_branches:
     main:
       required_pull_request_reviews:
