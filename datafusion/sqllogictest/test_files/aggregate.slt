@@ -4999,10 +4999,10 @@ create table d as values
   (NULL, NULL, NULL, NULL, 2);
 
 query I?
-SELECT column5, avg(column1) FROM d GROUP BY column5;
+SELECT column5, avg(column1) FROM d GROUP BY column5 ORDER BY column5;
 ----
-2 0 days 0 hours 0 mins 15 secs
 1 0 days 0 hours 0 mins 6 secs
+2 0 days 0 hours 0 mins 15 secs
 
 query I??
 SELECT column5, column1, avg(column1) OVER (PARTITION BY column5 ORDER BY column1 ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) as window_avg 
